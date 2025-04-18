@@ -1,0 +1,4 @@
+.venv# Ignore Python virtual environment
+.venv/
+env/
+project-root/.venv/

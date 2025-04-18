@@ -1,0 +1,104 @@
+
+{% load static %}
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Financial Sentiment Dashboard</title>
+
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="{% static 'css/styles.css' %}">
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Custom JavaScript -->
+    <script src="{% static 'js/script.js' %}" defer></script>
+</head>
+<body>
+
+<div class="container dashboard-container">
+    <h2 class="text-center my-4">📊 Financial Sentiment Dashboard</h2>
+
+    <div class="row">
+        <!-- Live News Sentiment -->
+        <div class="col-md-6">
+            <div class="card p-3">
+                <div class="card-header d-flex justify-content-between">
+                    <span>📢 Live Financial News Sentiment</span>
+                    <button class="btn btn-sm btn-outline-light" onclick="refreshNews()">🔄 Refresh</button>
+                </div>
+                <div class="card-body" id="news-feed">
+                    <div id="loading-indicator" class="text-muted">Loading news sentiment... ⏳</div>
+                </div>                
+            </div>
+        </div>
+
+        <!-- Market Sentiment Chart -->
+        <div class="col-md-6">
+            <div class="card p-3">
+                <div class="card-header">📈 Market Sentiment Overview</div>
+                <div class="card-body">
+                    <canvas id="sentimentChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-3">
+        <!-- Market Reaction Prediction -->
+        <div class="col-md-6">
+            <div class="card p-3">
+                <div class="card-header">🔮 Market Reaction Prediction</div>
+                <div class="card-body">
+                    <p>Predicted impact based on sentiment: <strong id="market-impact">Loading...</strong></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Custom Sentiment Analysis -->
+        <div class="col-md-6">
+            <div class="card p-3">
+                <div class="card-header">🔍 Custom Sentiment Analysis</div>
+                <div class="card-body">
+                    <input type="text" id="ticker-input" class="form-control" placeholder="Enter stock ticker (e.g., AAPL)">
+                    <button class="btn btn-primary mt-2" onclick="fetchCustomSentiment()">Analyze</button>
+                    <p class="mt-2" id="custom-sentiment-result"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+  <!-- AI-Powered News Analysis -->
+<div class="row mt-3">
+    <div class="col-md-12">
+        <div class="card p-3">
+            <div class="card-header">📝 Paste News for AI Sentiment Analysis</div>
+            <div class="card-body">
+                <textarea class="news-input" id="news-input" placeholder="Paste your news article here..."></textarea>
+                <button class="btn btn-success mt-2" onclick="analyzeNews()">Analyze News</button>
+                <p class="mt-2" id="news-analysis-result"></p>
+            </div>
+        </div>
+    </div>
+</div>
+
+    <!-- Sentiment Trend Chart -->
+    <div class="row mt-3">
+        <div class="col-md-12">
+            <div class="card p-3">
+                <div class="card-header">📊 Sentiment Trends Over Time</div>
+                <div class="card-body">
+                    <canvas id="trendChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+</body>
+</html>
