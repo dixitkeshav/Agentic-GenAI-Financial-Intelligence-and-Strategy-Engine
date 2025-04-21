@@ -1,106 +1,55 @@
 from django.shortcuts import render
 from django.http import JsonResponse
-from .models import NewsArticle
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
 import logging
 import requests
 import json
-from .sentiment import analyze_financial_sentiment 
-from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_POST   
+import os
+from .models import NewsArticle
+from .sentiment import analyze_financial_sentiment
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
 
-# Configure logging
 logger = logging.getLogger(__name__)
+ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "YOUR_API_KEY_HERE")  # Replace or use env variable
 
-# View to display financial news on the dashboard
+# Home/Dashboard View
 def dashboard(request):
-    logger.info("Fetching financial news articles...")
-
     try:
-        # Fetch news articles from the database
         articles = NewsArticle.objects.all().values('title', 'content', 'published_at')
-
-        if not articles:
-            logger.warning("No articles found in the database!")
-
-        # Render the 'index.html' template and pass the articles
-        logger.info(f"Returning {len(articles)} news articles.")
         return render(request, 'index.html', {'articles': articles})
-
     except Exception as e:
-        logger.error(f"Error fetching news articles: {e}", exc_info=True)
+        logger.error(f"Error loading dashboard: {e}", exc_info=True)
         return JsonResponse({'error': 'Internal Server Error'}, status=500)
 
-# API endpoint to fetch the news list in JSON format
-def news_list(request):
-    logger.info("Fetching news articles from the database...")
-
-    try:
-        # Fetch news articles from the database
-        news = NewsArticle.objects.all().values('title', 'content', 'published_at')
-        news_list = list(news)
-
-        if not news_list:
-            logger.warning("No news articles found in the database!")
-
-        logger.info(f"Returning {len(news_list)} news articles.")
-        return JsonResponse(news_list, safe=False)
-
-    except Exception as e:
-        logger.error(f"Error fetching news: {e}", exc_info=True)
-        return JsonResponse({'error': 'Internal Server Error'}, status=500)
-
+# News API from Alpha Vantage
 def fetch_news(request):
-    API_KEY = "3PYST3XF1NKH2ZY7"  # Replace with your actual key
-    url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics=financial_markets&apikey={API_KEY}"
-
+    url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics=financial_markets&apikey={ALPHA_VANTAGE_API_KEY}"
     try:
         response = requests.get(url)
         data = response.json()
 
-        # If no news data
         if 'feed' not in data:
-            return JsonResponse({'error': 'Failed to fetch news from Alpha Vantage'}, status=500)
+            return JsonResponse({'error': 'No news found'}, status=500)
 
-        articles = []
-
-        for item in data['feed'][:10]:  # Limit to top 10 news
-            articles.append({
-                'title': item.get('title', 'No Title'),
-                'summary': item.get('summary', ''),
-                'url': item.get('url', '#'),
-                'sentiment': item.get('overall_sentiment_label', 'neutral').lower()  # positive / neutral / negative
-            })
+        articles = [{
+            'title': item.get('title', 'No Title'),
+            'summary': item.get('summary', ''),
+            'url': item.get('url', '#'),
+            'sentiment': item.get('overall_sentiment_label', 'neutral').lower()
+        } for item in data['feed'][:10]]
 
         return JsonResponse({'articles': articles})
-
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
-        
-from django.http import JsonResponse
 
-def fetch_news_view(request):
-    # Example data — replace with actual logic
-    data = {
-        "articles": [
-            {"title": "Stock Market Hits Record High", "sentiment": "positive"},
-            {"title": "Inflation Concerns Roil Markets", "sentiment": "negative"}
-        ]
-    }
-    return JsonResponse(data)
-
-from django.http import JsonResponse
-
-def fetch_news_api(request):
-    articles = NewsArticle.objects.all().values('title', 'sentiment')
-    return JsonResponse({'articles': list(articles)})
-
-
+# Sentiment Distribution Chart Data (Dummy Data for Now)
 def sentiment_chart_data(request):
-    # Ideally fetch from DB or analysis logic
     data = {
         "distribution": {
             "labels": ["Positive", "Negative", "Neutral"],
-            "data": [62, 28, 10]  # Replace with real aggregated values
+            "data": [62, 28, 10]
         },
         "trend": {
             "labels": ["Day 1", "Day 2", "Day 3", "Day 4", "Day 5"],
@@ -110,13 +59,16 @@ def sentiment_chart_data(request):
     }
     return JsonResponse(data)
 
+# Sentiment Analysis for Pasted News (for /api/analyze-news/)
 @csrf_exempt
 @require_POST
 def analyze_news_view(request):
-    if request.method == 'POST':
-        import json
+    try:
         body = json.loads(request.body)
         text = body.get("text", "")
+        if not text:
+            return JsonResponse({'error': 'No text provided'}, status=400)
+
         sentiment, probabilities = analyze_financial_sentiment(text)
         return JsonResponse({
             "sentiment": sentiment,
@@ -126,4 +78,61 @@ def analyze_news_view(request):
                 "negative": round(probabilities[0], 3)
             }
         })
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
 
+# Ticker Symbol Auto-Suggestion (for /api/search-ticker/)
+def search_ticker(request):
+    query = request.GET.get('q', '')  # Use 'q' to match frontend
+    if not query:
+        return JsonResponse({'results': []})
+
+    url = f'https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords={query}&apikey={ALPHA_VANTAGE_API_KEY}'
+    try:
+        response = requests.get(url)
+        data = response.json()
+
+        # Return only the symbol for dropdown
+        results = [match.get("1. symbol", "") for match in data.get("bestMatches", []) if match.get("1. symbol", "")]
+        return JsonResponse({'results': results})
+    except Exception as e:
+        return JsonResponse({'results': []})
+
+# FinBERT Sentiment Analysis API (for /api/analyze-sentiment/)
+@api_view(['POST'])
+def analyze_sentiment(request):
+    text = request.data.get('text', '')
+    if not text:
+        return Response({"error": "No text provided."}, status=400)
+    try:
+        sentiment, probs = analyze_financial_sentiment(text)
+        return Response({
+            "sentiment": sentiment,
+            "probabilities": {
+                "negative": probs[0],
+                "neutral": probs[1],
+                "positive": probs[2]
+            }
+        })
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+
+# Custom Sentiment for Ticker (for /api/custom-sentiment/)
+@api_view(['POST'])
+def custom_sentiment(request):
+    ticker = request.data.get('ticker', '').upper()
+    if not ticker:
+        return Response({"error": "No ticker provided."}, status=400)
+    try:
+        # Example: fetch recent news for the ticker and aggregate sentiment
+        # For demo, just return neutral or use a simple mapping
+        # You can enhance this to fetch news and run FinBERT on each headline
+        if ticker == "AAPL":
+            sentiment = "positive"
+        elif ticker == "TSLA":
+            sentiment = "negative"
+        else:
+            sentiment = "neutral"
+        return Response({"sentiment": sentiment})
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)

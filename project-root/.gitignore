@@ -1,4 +1,19 @@
-.venv# Ignore Python virtual environment
+# Python
+__pycache__/
+*.pyc
+
+# Environment
+.env
+
+# Database
+db.sqlite3
+
+# Static files
+staticfiles/
+
+# Logs
+logs/
+
+# Virtual environment
 .venv/
 env/
-project-root/.venv/
