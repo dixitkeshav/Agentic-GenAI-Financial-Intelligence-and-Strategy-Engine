@@ -13,6 +13,7 @@ staticfiles/
 
 # Logs
 logs/
+*.log
 
 # Virtual environment
 .venv/
