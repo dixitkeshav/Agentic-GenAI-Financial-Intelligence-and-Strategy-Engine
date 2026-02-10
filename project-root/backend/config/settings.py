@@ -14,7 +14,14 @@ ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "*").split(",")
 
 # Application definition
 INSTALLED_APPS = [
+    'daphne',
     'fetch_news',
+    'intelligence',
+    'agents',
+    'quant',
+    'pipelines',
+    'evaluation',
+    'cross_domain',
     'rest_framework',
     'corsheaders',
     'django.contrib.admin',
@@ -73,7 +80,7 @@ LOGGING = {
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [BASE_DIR / 'backend/fetch_news/templates'],
+        'DIRS': [BASE_DIR / 'fetch_news/templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -86,8 +93,42 @@ TEMPLATES = [
     },
 ]
 
-# WSGI
+# WSGI / ASGI
 WSGI_APPLICATION = 'config.wsgi.application'
+ASGI_APPLICATION = 'config.asgi.application'
+
+# Redis (optional - used for cache and Celery)
+REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": REDIS_URL,
+        "OPTIONS": {"CLIENT_CLASS": "django_redis.client.DefaultClient"},
+    }
+}
+# Fallback to locmem if django_redis not installed
+try:
+    from django_redis import get_redis_connection
+except ImportError:
+    CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
+
+# Feature flags (env-based)
+FEATURE_GENAI_INSIGHTS = os.getenv("FEATURE_GENAI_INSIGHTS", "true").lower() == "true"
+FEATURE_AGENTS = os.getenv("FEATURE_AGENTS", "true").lower() == "true"
+FEATURE_QUANT_SIGNALS = os.getenv("FEATURE_QUANT_SIGNALS", "true").lower() == "true"
+FEATURE_WEBSOCKETS = os.getenv("FEATURE_WEBSOCKETS", "true").lower() == "true"
+
+# Channels (WebSockets) - use InMemory when Redis not available
+try:
+    import channels_redis
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {"hosts": [os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")]},
+        }
+    }
+except ImportError:
+    CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
 
 # Database
 DATABASES = {
@@ -110,6 +151,14 @@ LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_TZ = True
+
+# Celery (after TIME_ZONE)
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/1")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/2")
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
 
 # Static Files (CSS/JS)
 STATIC_URL = '/static/'
