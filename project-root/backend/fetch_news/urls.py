@@ -5,8 +5,17 @@ from .views import (
     sentiment_chart_data,
     analyze_news_view,
     search_ticker,
-    analyze_sentiment,  # Import the FinBERT-based view
+    analyze_sentiment,
     custom_sentiment,
+    analyze_with_insights,
+    agents_run,
+    symbol_deep_dive,
+    live_ticker,
+    quant_signals,
+    quant_backtest,
+    evaluation_sentiment_accuracy,
+    evaluation_latency,
+    cross_domain_news,
 )
 
 urlpatterns = [
@@ -15,6 +24,15 @@ urlpatterns = [
     path('api/chart-data/', sentiment_chart_data, name='chart_data'),
     path('api/analyze-news/', analyze_news_view, name='analyze_news'),
     path('api/search-ticker/', search_ticker, name='search_ticker'),
-    path('api/analyze-sentiment/', analyze_sentiment, name='analyze_sentiment'),  # <-- Add this line
-    path('api/custom-sentiment/', custom_sentiment, name='custom_sentiment'),  # <-- Add this line
+    path('api/analyze-sentiment/', analyze_sentiment, name='analyze_sentiment'),
+    path('api/custom-sentiment/', custom_sentiment, name='custom_sentiment'),
+    path('api/analyze-with-insights/', analyze_with_insights, name='analyze_with_insights'),
+    path('api/agents/run/', agents_run, name='agents_run'),
+    path('api/agents/symbol-deep-dive/', symbol_deep_dive, name='symbol_deep_dive'),
+    path('api/live-ticker/', live_ticker, name='live_ticker'),
+    path('api/quant/signals/', quant_signals, name='quant_signals'),
+    path('api/quant/backtest/', quant_backtest, name='quant_backtest'),
+    path('api/evaluation/sentiment-accuracy/', evaluation_sentiment_accuracy, name='evaluation_sentiment_accuracy'),
+    path('api/evaluation/latency/', evaluation_latency, name='evaluation_latency'),
+    path('api/cross-domain/', cross_domain_news, name='cross_domain_news'),
 ]
