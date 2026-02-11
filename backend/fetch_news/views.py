@@ -47,7 +47,9 @@ def fetch_news(request):
             'title': item.get('title', 'No Title'),
             'summary': item.get('summary', ''),
             'url': item.get('url', '#'),
-            'sentiment': (item.get('overall_sentiment_label') or 'Neutral').lower()
+            'sentiment': (item.get('overall_sentiment_label') or 'Neutral').lower(),
+            'source': item.get('source', 'Alpha Vantage'),
+            'time_published': item.get('time_published', ''),
         } for item in data['feed'][:20]]
 
         payload = {'articles': articles}
@@ -317,6 +319,37 @@ def symbol_deep_dive(request):
     except Exception as e:
         logger.exception("symbol_deep_dive: %s", e)
         return Response({"error": str(e)}, status=500)
+
+
+# ——— Market price history (OHLC) for charts ———
+@api_view(['GET'])
+def market_history(request, symbol: str):
+    """Return OHLC history for a symbol. Query: period=1d|5d|1mo|3mo|6mo|1y"""
+    period = request.GET.get('period', '1mo')
+    valid_periods = ['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y']
+    if period not in valid_periods:
+        period = '1mo'
+    try:
+        import yfinance as yf
+        t = yf.Ticker(symbol)
+        hist = t.history(period=period)
+        if hist is None or hist.empty:
+            return Response({"error": "No data", "history": []})
+        history = [
+            {
+                "timestamp": int(row.name.timestamp() * 1000),
+                "open": round(float(row["Open"]), 2),
+                "high": round(float(row["High"]), 2),
+                "low": round(float(row["Low"]), 2),
+                "close": round(float(row["Close"]), 2),
+                "volume": int(row["Volume"]) if "Volume" in row else 0,
+            }
+            for row in hist.itertuples()
+        ]
+        return Response({"symbol": symbol, "history": history})
+    except Exception as e:
+        logger.warning("market_history: %s", e)
+        return Response({"error": str(e), "history": []})
 
 
 # ——— Live ticker / indices (for scrolling strip: symbol, price, change) ———
