@@ -36,6 +36,8 @@ export function TradingChart() {
   const { data: history = [], isLoading } = useQuery({
     queryKey: ['chart-data', symbol, period],
     queryFn: () => apiClient.getChartData(symbol, period),
+    refetchInterval: 60000, // refresh chart data
+    refetchIntervalInBackground: true,
     staleTime: 60000,
   });
 
@@ -64,16 +66,8 @@ export function TradingChart() {
     volume: { label: 'Volume', color: '#10b981' },
   };
 
-  const fallbackData = Array.from({ length: 30 }, (_, i) => ({
-    timestamp: Date.now() - (30 - i) * 86400000,
-    price: 23800 + Math.random() * 200 + i * 2,
-    volume: Math.floor(Math.random() * 5000000) + 1000000,
-    date: new Date(Date.now() - (30 - i) * 86400000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-  }));
-  const dataToShow = chartData.length > 0 ? chartData : fallbackData;
-
   return (
-    <Card className="glass-effect min-h-0 shrink-0 overflow-hidden">
+    <Card className="glass-effect h-full">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
@@ -111,9 +105,10 @@ export function TradingChart() {
         {isLoading ? (
           <Skeleton className="h-[300px] w-full" />
         ) : (
-          <>
-            <ChartContainer config={chartConfig} className="h-[300px] w-full min-h-[300px]">
-              <AreaChart data={dataToShow}>
+          chartData.length ? (
+            <>
+            <ChartContainer config={chartConfig} className="h-[300px] w-full">
+              <AreaChart data={chartData}>
                 <defs>
                   <linearGradient id="priceGradient" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.3} />
@@ -145,8 +140,8 @@ export function TradingChart() {
               </AreaChart>
             </ChartContainer>
 
-            <ChartContainer config={chartConfig} className="h-[100px] w-full min-h-[100px]">
-              <BarChart data={dataToShow}>
+            <ChartContainer config={chartConfig} className="h-[100px] w-full">
+              <BarChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                 <XAxis
                   dataKey="date"
@@ -164,7 +159,12 @@ export function TradingChart() {
                 <Bar dataKey="volume" fill="#10b981" opacity={0.6} radius={[4, 4, 0, 0]} />
               </BarChart>
             </ChartContainer>
-          </>
+            </>
+          ) : (
+            <div className="py-10 text-center">
+              <p className="text-sm text-muted-foreground">No chart data returned for {displaySymbol}.</p>
+            </div>
+          )
         )}
       </CardContent>
     </Card>
