@@ -46,6 +46,49 @@ export interface AgentsRunResult {
   recommendation?: string;
 }
 
+export interface ScannerResultItem {
+  symbol: string;
+  signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  confidence: number;
+  sentiment: 'positive' | 'negative' | 'neutral' | string;
+  sentiment_score: number;
+  momentum: number;
+  sentiment_counts: {
+    positive: number;
+    negative: number;
+    neutral: number;
+    total: number;
+  };
+}
+
+export interface ScannerResponse {
+  period: string;
+  results: ScannerResultItem[];
+}
+
+export interface OptionsChainSide {
+  bid: number | null;
+  ask: number | null;
+  lastPrice: number | null;
+  impliedVolatility: number | null;
+  openInterest: number | null;
+  volume: number | null;
+}
+
+export interface OptionsChainRow {
+  strike: number;
+  call: OptionsChainSide;
+  put: OptionsChainSide;
+}
+
+export interface OptionsChainResponse {
+  symbol: string;
+  expiry: string | null;
+  expiries: string[];
+  data: OptionsChainRow[];
+  error?: string;
+}
+
 export const apiClient = {
   /** Fetch news from /api/fetch-news/ (Alpha Vantage NEWS_SENTIMENT) */
   async getNews(limit = 50): Promise<NewsItem[]> {
@@ -53,8 +96,15 @@ export const apiClient = {
       const response = await fetch(`${API_BASE_URL}/api/fetch-news/`);
       if (!response.ok) throw new Error('Failed to fetch news');
       const data = await response.json();
-      if (data.error) throw new Error(data.error);
       const articles = data.articles || [];
+      if (data.error && !articles.length) {
+        // Treat upstream "no feed / rate limit" as an empty result.
+        return [];
+      }
+      if (data.error) {
+        // If the API returned partial data, still surface error via console.
+        console.warn('fetch-news warning:', data.error);
+      }
       return articles.map((item: { title?: string; summary?: string; url?: string; sentiment?: string; source?: string; time_published?: string }, i: number) => {
         const ts = item.time_published ? new Date(item.time_published.replace(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/, '$1-$2-$3T$4:$5:$6')) : new Date();
         // Normalize sentiment to valid values
@@ -147,5 +197,22 @@ export const apiClient = {
       console.error('Error fetching live ticker:', error);
       return [];
     }
+  },
+
+  /** Fetch scanner results from /api/scanner/ */
+  async getScanner(symbols: string, period = '3mo'): Promise<ScannerResponse> {
+    const params = new URLSearchParams({ symbols, period });
+    const response = await fetch(`${API_BASE_URL}/api/scanner/?${params.toString()}`);
+    if (!response.ok) throw new Error('Failed to fetch scanner results');
+    return await response.json();
+  },
+
+  /** Fetch options chain from /api/options-chain/ (best-effort) */
+  async getOptionsChain(symbol: string, expiry?: string): Promise<OptionsChainResponse> {
+    const params = new URLSearchParams({ symbol });
+    if (expiry) params.set('expiry', expiry);
+    const response = await fetch(`${API_BASE_URL}/api/options-chain/?${params.toString()}`);
+    if (!response.ok) throw new Error('Failed to fetch options chain');
+    return await response.json();
   },
 };
