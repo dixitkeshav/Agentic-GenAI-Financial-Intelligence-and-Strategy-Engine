@@ -36,7 +36,9 @@ const navigation = [
   { name: 'Markets', icon: TrendingUp, href: '/dashboard/markets' },
   { name: 'News Intelligence', icon: Newspaper, href: '/dashboard/news' },
   { name: 'Agent Insights', icon: Brain, href: '/dashboard/agents' },
+  { name: 'Screener', icon: Search, href: '/dashboard/scanner' },
   { name: 'Backtesting', icon: FlaskConical, href: '/dashboard/backtest' },
+  { name: 'Options Chain', icon: TrendingUp, href: '/dashboard/options' },
   { name: 'Portfolio', icon: Briefcase, href: '/dashboard/portfolio' },
   { name: 'Settings', icon: Settings, href: '/dashboard/settings' },
 ];
