@@ -10,57 +10,6 @@ import { Newspaper } from 'lucide-react';
 export function NewsFeed() {
   const { news, isLoading } = useNewsFeed();
 
-  // Mock data for demonstration
-  const mockNews = [
-    {
-      id: '1',
-      headline: 'Tech stocks rally as AI sector shows strong growth momentum',
-      source: 'Bloomberg',
-      sentiment: 'positive' as const,
-      sentimentScore: 0.78,
-      timestamp: new Date(Date.now() - 1000 * 60 * 5),
-      symbols: ['AAPL', 'MSFT', 'NVDA'],
-    },
-    {
-      id: '2',
-      headline: 'Federal Reserve signals potential rate cuts amid slowing inflation',
-      source: 'Reuters',
-      sentiment: 'positive' as const,
-      sentimentScore: 0.65,
-      timestamp: new Date(Date.now() - 1000 * 60 * 15),
-      symbols: ['SPY', 'TLT'],
-    },
-    {
-      id: '3',
-      headline: 'Banking sector faces headwinds as loan defaults increase',
-      source: 'Financial Times',
-      sentiment: 'negative' as const,
-      sentimentScore: -0.52,
-      timestamp: new Date(Date.now() - 1000 * 60 * 30),
-      symbols: ['BAC', 'JPM', 'WFC'],
-    },
-    {
-      id: '4',
-      headline: 'Crypto markets show consolidation pattern, analysts remain neutral',
-      source: 'CoinDesk',
-      sentiment: 'neutral' as const,
-      sentimentScore: 0.05,
-      timestamp: new Date(Date.now() - 1000 * 60 * 45),
-      symbols: ['BTC', 'ETH'],
-    },
-    {
-      id: '5',
-      headline: 'Energy sector surges on OPEC+ production cut announcement',
-      source: 'CNBC',
-      sentiment: 'positive' as const,
-      sentimentScore: 0.82,
-      timestamp: new Date(Date.now() - 1000 * 60 * 60),
-      symbols: ['XLE', 'XOM', 'CVX'],
-    },
-  ];
-
-  const displayNews = news.length > 0 ? news : mockNews;
-
   return (
     <Card className="glass-effect h-full flex flex-col">
       <CardHeader className="pb-3">
@@ -88,9 +37,13 @@ export function NewsFeed() {
                 </Card>
               ))
             ) : (
-              displayNews.map((item, index) => (
-                <NewsCard key={item.id} news={item} index={index} />
-              ))
+              news.length ? (
+                news.map((item, index) => <NewsCard key={item.id} news={item} index={index} />)
+              ) : (
+                <div className="py-8 text-center">
+                  <p className="text-sm text-muted-foreground">No live news available right now.</p>
+                </div>
+              )
             )}
           </div>
         </ScrollArea>
