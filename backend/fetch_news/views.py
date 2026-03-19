@@ -40,17 +40,42 @@ def fetch_news(request):
         response = requests.get(url, timeout=15)
         data = response.json()
 
-        if 'feed' not in data:
-            return JsonResponse({'error': 'No news found'}, status=500)
+        feed = data.get("feed") or []
+        if not feed:
+            # Avoid hard-failing the frontend.
+            err = data.get("Note") or data.get("Error Message") or "No news found"
+            payload = {"articles": [], "error": err}
+            try:
+                cache.set(cache_key, payload, timeout=120)  # 2 minutes
+            except Exception:
+                pass
+            return JsonResponse(payload, status=200)
 
-        articles = [{
-            'title': item.get('title', 'No Title'),
-            'summary': item.get('summary', ''),
-            'url': item.get('url', '#'),
-            'sentiment': (item.get('overall_sentiment_label') or 'Neutral').lower(),
-            'source': item.get('source', 'Alpha Vantage'),
-            'time_published': item.get('time_published', ''),
-        } for item in data['feed'][:20]]
+        articles = [
+            {
+                "title": item.get("title", "No Title"),
+                "summary": item.get("summary", ""),
+                "url": item.get("url", "#"),
+                "sentiment": (item.get("overall_sentiment_label") or "Neutral").lower(),
+                "source": item.get("source", "Alpha Vantage"),
+                "time_published": item.get("time_published", ""),
+            }
+            for item in feed[:20]
+        ]
+
+        # Persist for sentiment charts.
+        try:
+            for a in articles:
+                title = (a.get("title") or "").strip()
+                summary = (a.get("summary") or "").strip()
+                if not title or not summary:
+                    continue
+                NewsArticle.objects.update_or_create(
+                    title=title,
+                    defaults={"content": summary[:20000]},
+                )
+        except Exception:
+            logger.exception("fetch_news: failed to persist NewsArticle records")
 
         payload = {'articles': articles}
         try:
@@ -59,31 +84,49 @@ def fetch_news(request):
             pass
         return JsonResponse(payload)
     except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
+        # Keep API stable for the frontend.
+        return JsonResponse({"articles": [], "error": str(e)}, status=200)
 
 # Sentiment Distribution Chart Data (from recent news when available)
 def sentiment_chart_data(request):
     try:
-        articles = list(NewsArticle.objects.all().values_list("title", "content")[:100])
+        articles = list(NewsArticle.objects.all().values_list("title", "content")[:200])
         if articles:
             from .sentiment import analyze_financial_sentiment
             pos = neg = neu = 0
+            labels: list[str] = []
             for title, content in articles:
                 text = (title or "") + " " + (content or "")[:500]
                 if not text.strip():
                     continue
                 try:
                     s, _ = analyze_financial_sentiment(text)
-                    if s == "positive": pos += 1
-                    elif s == "negative": neg += 1
-                    else: neu += 1
+                    s = (s or "neutral").lower()
+                    labels.append(s)
+                    if s == "positive":
+                        pos += 1
+                    elif s == "negative":
+                        neg += 1
+                    else:
+                        neu += 1
                 except Exception:
                     neu += 1
             total = pos + neg + neu
             if total:
+                chunk_size = max(1, len(labels) // 5)
+                trend_positive = []
+                trend_negative = []
+                for i in range(5):
+                    chunk = labels[i * chunk_size : (i + 1) * chunk_size]
+                    trend_positive.append(sum(1 for x in chunk if x == "positive"))
+                    trend_negative.append(sum(1 for x in chunk if x == "negative"))
                 data = {
                     "distribution": {"labels": ["Positive", "Negative", "Neutral"], "data": [pos, neg, neu]},
-                    "trend": {"labels": ["Day 1", "Day 2", "Day 3", "Day 4", "Day 5"], "positive": [pos]*5, "negative": [neg]*5}
+                    "trend": {
+                        "labels": ["Day 1", "Day 2", "Day 3", "Day 4", "Day 5"],
+                        "positive": trend_positive,
+                        "negative": trend_negative,
+                    },
                 }
             else:
                 data = _default_chart_data()
@@ -218,9 +261,51 @@ def agents_run(request):
             articles = request.data["articles"]
         else:
             url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics=financial_markets&apikey={ALPHA_VANTAGE_API_KEY}&limit=25"
-            r = requests.get(url, timeout=15)
-            feed = r.json().get("feed", [])
-            articles = [{"title": i.get("title", ""), "summary": i.get("summary", ""), "sentiment": (i.get("overall_sentiment_label") or "Neutral").lower()} for i in feed[:25]]
+            try:
+                r = requests.get(url, timeout=25)
+                feed = r.json().get("feed", [])
+            except Exception:
+                feed = []
+
+            if feed:
+                articles = [
+                    {
+                        "title": i.get("title", ""),
+                        "summary": i.get("summary", ""),
+                        "sentiment": (i.get("overall_sentiment_label") or "Neutral").lower(),
+                    }
+                    for i in feed[:25]
+                ]
+            else:
+                # Fallback: avoid empty/timeout failures by using stored news + FinBERT sentiment.
+                from .sentiment import analyze_financial_sentiment
+                stored = list(
+                    NewsArticle.objects.all()
+                    .order_by("-published_at")
+                    .values_list("title", "content")[:30]
+                )
+                articles = []
+                for title, content in stored:
+                    text = ((title or "") + " " + (content or ""))[:2000]
+                    if not text.strip():
+                        continue
+                    try:
+                        s, _ = analyze_financial_sentiment(text)
+                        articles.append(
+                            {
+                                "title": title or "",
+                                "summary": content or "",
+                                "sentiment": (s or "neutral").lower(),
+                            }
+                        )
+                    except Exception:
+                        articles.append(
+                            {
+                                "title": title or "",
+                                "summary": content or "",
+                                "sentiment": "neutral",
+                            }
+                        )
         ticker = (request.data if request.method == "POST" else request.GET).get("ticker", "")
         agg = "neutral"
         if articles:
@@ -398,3 +483,195 @@ def cross_domain_news(request):
         return Response({"domain": domain, "articles": articles, "cross_domain_reasoning": summary})
     except Exception as e:
         return Response({"error": str(e)}, status=500)
+
+
+# ——— Screener / Scanner ———
+@api_view(["GET"])
+def scanner(request):
+    """
+    Simple functional screener:
+    - sentiment from Alpha Vantage (NEWS_SENTIMENT) aggregated into pos/neg counts
+    - momentum from yfinance price change
+    - outputs BULLISH/BEARISH/NEUTRAL + confidence
+    """
+    symbols_csv = request.GET.get("symbols", "").strip()
+    if not symbols_csv:
+        symbols_csv = "^NSEI,AAPL,MSFT,NVDA,RELIANCE.NS"
+
+    symbols = [s.strip().upper() for s in symbols_csv.split(",") if s.strip()]
+    period = request.GET.get("period", "3mo")
+
+    def _alpha_sentiment_for_ticker(ticker: str) -> dict:
+        try:
+            url = (
+                "https://www.alphavantage.co/query"
+                f"?function=NEWS_SENTIMENT&tickers={ticker}"
+                f"&apikey={ALPHA_VANTAGE_API_KEY}&limit=15"
+            )
+            r = requests.get(url, timeout=20)
+            data = r.json()
+            feed = data.get("feed", []) or []
+            if not feed:
+                return {"sentiment": "neutral", "count": 0, "positive": 0, "negative": 0, "neutral": 0}
+            pos = neg = neu = 0
+            for item in feed:
+                lab = (item.get("overall_sentiment_label") or "Neutral").lower()
+                if lab == "positive":
+                    pos += 1
+                elif lab == "negative":
+                    neg += 1
+                else:
+                    neu += 1
+            count = pos + neg + neu
+            if count == 0:
+                sentiment = "neutral"
+            elif pos > neg and pos > neu:
+                sentiment = "positive"
+            elif neg > pos and neg > neu:
+                sentiment = "negative"
+            else:
+                sentiment = "neutral"
+            return {
+                "sentiment": sentiment,
+                "count": count,
+                "positive": pos,
+                "negative": neg,
+                "neutral": neu,
+            }
+        except Exception:
+            return {"sentiment": "neutral", "count": 0, "positive": 0, "negative": 0, "neutral": 0}
+
+    def _momentum_for_symbol(ticker: str) -> dict:
+        try:
+            import yfinance as yf
+            t = yf.Ticker(ticker)
+            hist = t.history(period=period)
+            if hist is None or hist.empty or "Close" not in hist:
+                return {"momentum": 0.0, "start_price": None, "end_price": None}
+            closes = hist["Close"].dropna()
+            if len(closes) < 2:
+                return {"momentum": 0.0, "start_price": None, "end_price": None}
+            start = float(closes.iloc[0])
+            end = float(closes.iloc[-1])
+            mom = (end / start - 1.0) if start else 0.0
+            return {"momentum": mom, "start_price": start, "end_price": end}
+        except Exception:
+            return {"momentum": 0.0, "start_price": None, "end_price": None}
+
+    results = []
+    for sym in symbols:
+        sent = _alpha_sentiment_for_ticker(sym)
+        mom = _momentum_for_symbol(sym)
+
+        pos = sent.get("positive", 0) or 0
+        neg = sent.get("negative", 0) or 0
+        count = sent.get("count", 0) or 0
+
+        # sentiment_score in [-1, 1]
+        sentiment_score = 0.0
+        if count > 0:
+            sentiment_score = float(pos - neg) / float(count)
+
+        momentum = mom.get("momentum", 0.0) or 0.0
+
+        if sentiment_score > 0 and momentum > 0:
+            signal = "BULLISH"
+        elif sentiment_score < 0 and momentum < 0:
+            signal = "BEARISH"
+        else:
+            signal = "NEUTRAL"
+
+        # Confidence is a heuristic blend of sentiment strength + absolute momentum.
+        abs_sent = min(abs(sentiment_score), 1.0)
+        abs_mom = min(abs(momentum) * 5.0, 1.0)  # scale momentum into [0,1]
+        confidence = round(0.5 * abs_sent + 0.5 * abs_mom, 3)
+
+        results.append(
+            {
+                "symbol": sym,
+                "signal": signal,
+                "confidence": confidence,
+                "sentiment": sent.get("sentiment", "neutral"),
+                "sentiment_score": round(sentiment_score, 4),
+                "momentum": round(momentum, 6),
+                "sentiment_counts": {
+                    "positive": pos,
+                    "negative": neg,
+                    "neutral": sent.get("neutral", 0) or 0,
+                    "total": count,
+                },
+            }
+        )
+
+    return Response({"period": period, "results": results})
+
+
+# ——— Options chain (US example via yfinance) ———
+@api_view(["GET"])
+def options_chain(request):
+    """
+    Options chain for a symbol (best-effort via yfinance).
+    For India NSE-style chains, you'll likely need a dedicated provider.
+    """
+    symbol = (request.GET.get("symbol") or "").strip().upper()
+    if not symbol:
+        symbol = "AAPL"
+    expiry = (request.GET.get("expiry") or "").strip()
+
+    cache_key = f"options_chain:{symbol}:{expiry or 'auto'}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return Response(cached)
+
+    try:
+        import yfinance as yf
+        t = yf.Ticker(symbol)
+        expiries = list(t.options or [])
+        if not expiries:
+            payload = {"symbol": symbol, "expiry": None, "expiries": [], "data": [], "error": "No options expiries found"}
+            cache.set(cache_key, payload, timeout=300)
+            return Response(payload)
+
+        if not expiry or expiry not in expiries:
+            expiry = expiries[0]
+
+        chain = t.option_chain(expiry)
+        calls = chain.calls
+        puts = chain.puts
+
+        strikes = sorted(set(calls["strike"].tolist()) | set(puts["strike"].tolist()))
+        rows = []
+        for strike in strikes:
+            ce = calls[calls["strike"] == strike]
+            pe = puts[puts["strike"] == strike]
+            ce_row = ce.iloc[0].to_dict() if len(ce) else {}
+            pe_row = pe.iloc[0].to_dict() if len(pe) else {}
+            rows.append(
+                {
+                    "strike": float(strike),
+                    "call": {
+                        "bid": ce_row.get("bid"),
+                        "ask": ce_row.get("ask"),
+                        "lastPrice": ce_row.get("lastPrice"),
+                        "impliedVolatility": ce_row.get("impliedVolatility"),
+                        "openInterest": ce_row.get("openInterest"),
+                        "volume": ce_row.get("volume"),
+                    },
+                    "put": {
+                        "bid": pe_row.get("bid"),
+                        "ask": pe_row.get("ask"),
+                        "lastPrice": pe_row.get("lastPrice"),
+                        "impliedVolatility": pe_row.get("impliedVolatility"),
+                        "openInterest": pe_row.get("openInterest"),
+                        "volume": pe_row.get("volume"),
+                    },
+                }
+            )
+
+        payload = {"symbol": symbol, "expiry": expiry, "expiries": expiries[:10], "data": rows}
+        cache.set(cache_key, payload, timeout=60)
+        return Response(payload)
+    except Exception as e:
+        payload = {"symbol": symbol, "expiry": expiry or None, "expiries": [], "data": [], "error": str(e)}
+        cache.set(cache_key, payload, timeout=60)
+        return Response(payload)
