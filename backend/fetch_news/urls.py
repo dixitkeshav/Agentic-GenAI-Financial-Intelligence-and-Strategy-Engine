@@ -17,12 +17,16 @@ from .views import (
     evaluation_sentiment_accuracy,
     evaluation_latency,
     cross_domain_news,
+    scanner,
+    options_chain,
 )
 
 urlpatterns = [
     path('', dashboard, name='dashboard'),
     path('api/fetch-news/', fetch_news, name='fetch_news'),
     path('api/chart-data/', sentiment_chart_data, name='chart_data'),
+    path('api/scanner/', scanner, name='scanner'),
+    path('api/options-chain/', options_chain, name='options_chain'),
     path('api/analyze-news/', analyze_news_view, name='analyze_news'),
     path('api/search-ticker/', search_ticker, name='search_ticker'),
     path('api/analyze-sentiment/', analyze_sentiment, name='analyze_sentiment'),
