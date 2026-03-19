@@ -32,20 +32,16 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Main Grid Layout - min-h-0 prevents overlap in flex/grid children */}
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 min-h-0">
-            {/* Left Column - Charts (stacked, no overlap) */}
-            <div className="xl:col-span-2 flex flex-col gap-6 min-h-0">
-              <div className="min-h-0 shrink-0">
-                <TradingChart />
-              </div>
-              <div className="min-h-0 shrink-0">
-                <SentimentChart />
-              </div>
+          {/* Main Grid Layout */}
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            {/* Left Column - Chart */}
+            <div className="xl:col-span-2 space-y-6">
+              <TradingChart />
+              <SentimentChart />
             </div>
 
             {/* Right Column - News Feed */}
-            <div className="xl:col-span-1 min-h-0">
+            <div className="xl:col-span-1">
               <NewsFeed />
             </div>
           </div>
