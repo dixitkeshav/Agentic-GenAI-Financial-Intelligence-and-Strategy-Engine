@@ -13,7 +13,7 @@ export function useLiveTicker() {
   const { data: tickers = [] } = useQuery({
     queryKey: ['live-ticker'],
     queryFn: () => apiClient.getLiveTicker(),
-    refetchInterval: 120000, // 2 minutes
+    refetchInterval: 30000, // 30 seconds
     staleTime: 60000,
   });
 
