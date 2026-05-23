@@ -67,6 +67,10 @@ export default function ScannerPage() {
           </Button>
 
           {error && <p className="text-sm text-price-down">{error}</p>}
+          <p className="text-xs text-muted-foreground">
+            First run can take 30–90s with Finnhub + FinBERT (sentiment on headlines). Use fewer symbols for a faster
+            scan.
+          </p>
         </CardContent>
       </Card>
 
@@ -75,7 +79,7 @@ export default function ScannerPage() {
           <CardTitle>Results</CardTitle>
         </CardHeader>
         <CardContent>
-          {loading && !data ? (
+          {loading ? (
             <div className="space-y-2">
               {Array.from({ length: 6 }).map((_, i) => (
                 <Skeleton key={i} className="h-10 w-full" />
@@ -108,6 +112,8 @@ export default function ScannerPage() {
                 </tbody>
               </table>
             </div>
+          ) : data ? (
+            <p className="text-sm text-muted-foreground">No rows returned (check API keys / symbols).</p>
           ) : (
             <p className="text-sm text-muted-foreground">Run the scanner to see results.</p>
           )}
