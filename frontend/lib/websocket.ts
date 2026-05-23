@@ -8,7 +8,7 @@ export class WebSocketClient {
 
   constructor(private endpoint: string) {}
 
-  connect(onMessage: (data: any) => void, onError?: (error: Event) => void) {
+  connect(onMessage: (data: unknown) => void, onError?: (error: Event) => void) {
     try {
       this.ws = new WebSocket(`${WS_BASE_URL}${this.endpoint}`);
 
@@ -19,8 +19,8 @@ export class WebSocketClient {
 
       this.ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
-          onMessage(data);
+          const parsed: unknown = JSON.parse(event.data);
+          onMessage(parsed);
         } catch (error) {
           console.error('Error parsing WebSocket message:', error);
         }
@@ -40,7 +40,7 @@ export class WebSocketClient {
     }
   }
 
-  private attemptReconnect(onMessage: (data: any) => void, onError?: (error: Event) => void) {
+  private attemptReconnect(onMessage: (data: unknown) => void, onError?: (error: Event) => void) {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
       console.log(`Attempting to reconnect... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
@@ -50,7 +50,7 @@ export class WebSocketClient {
     }
   }
 
-  send(data: any) {
+  send(data: unknown) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
     }
