@@ -22,6 +22,8 @@ INSTALLED_APPS = [
     'pipelines',
     'evaluation',
     'cross_domain',
+    'shock_predictor',
+    'django_celery_beat',
     'rest_framework',
     'corsheaders',
     'django.contrib.admin',
@@ -47,7 +49,9 @@ MIDDLEWARE = [
 # CORS Configuration
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
+    "http://127.0.0.1:3000",
     "http://127.0.0.1:8000",
+    "http://localhost:8000",
 ]
 CORS_ALLOW_ALL_ORIGINS = True
 
@@ -148,7 +152,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Internationalization
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
+TIME_ZONE = os.getenv('DJANGO_TIME_ZONE', 'Asia/Kolkata')
 USE_I18N = True
 USE_TZ = True
 
@@ -159,6 +163,24 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
+
+from celery.schedules import crontab
+
+CELERY_BEAT_SCHEDULE = {
+    'shock-poll-and-score': {
+        'task': 'shock_predictor.tasks.poll_and_score',
+        'schedule': 30.0,
+    },
+    'shock-eod-feedback': {
+        'task': 'shock_predictor.tasks.update_eod_feedback',
+        'schedule': crontab(hour=15, minute=35),
+    },
+}
+
+# Shock predictor integrations
+NEWSAPI_KEY = os.getenv('NEWSAPI_KEY', '')
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
 # Static Files (CSS/JS)
 STATIC_URL = '/static/'
