@@ -5,59 +5,73 @@ import { useQuery } from '@tanstack/react-query';
 import { apiClient, AgentsRunResult } from '@/lib/apiClient';
 import { useAgentStore, AgentInsight } from '@/store/agentStore';
 
+function signalFromText(s: string): AgentInsight['signal'] {
+  const l = (s || '').toLowerCase();
+  if (l.includes('positive') || l.includes('bullish') || l.includes('up')) return 'BULLISH';
+  if (l.includes('negative') || l.includes('bearish') || l.includes('down')) return 'BEARISH';
+  return 'NEUTRAL';
+}
+
 function mapAgentsResultToInsights(result: AgentsRunResult | null): AgentInsight[] {
   if (!result) return [];
   const insights: AgentInsight[] = [];
   const now = new Date();
 
-  const signalFromSentiment = (s: string): AgentInsight['signal'] => {
-    const l = (s || '').toLowerCase();
-    if (l.includes('positive') || l.includes('bullish') || l.includes('up')) return 'BULLISH';
-    if (l.includes('negative') || l.includes('bearish') || l.includes('down')) return 'BEARISH';
-    return 'NEUTRAL';
-  };
-
   if (result.news_scout?.summary) {
     insights.push({
       id: 'news-scout',
-      agentName: 'Sentiment',
-      signal: result.news_scout.spike_direction === 'positive' ? 'BULLISH' : result.news_scout.spike_direction === 'negative' ? 'BEARISH' : 'NEUTRAL',
+      agentName: 'News Scout',
+      signal:
+        result.news_scout.spike_direction === 'positive'
+          ? 'BULLISH'
+          : result.news_scout.spike_direction === 'negative'
+            ? 'BEARISH'
+            : 'NEUTRAL',
       confidence: result.news_scout.spike_detected ? 78 : 65,
       explanation: result.news_scout.summary,
       timestamp: now,
       metrics: result.news_scout.spike_detected ? { spike: 1 } : undefined,
     });
   }
+
   if (result.macro_context?.summary) {
     insights.push({
       id: 'macro',
       agentName: 'Macro',
-      signal: signalFromSentiment(result.macro_context.summary),
+      signal: signalFromText(result.macro_context.summary),
       confidence: 72,
       explanation: result.macro_context.summary,
       timestamp: now,
-      metrics: result.macro_context.macro_links?.length ? { links: result.macro_context.macro_links.length } : undefined,
+      metrics: result.macro_context.macro_links?.length
+        ? { macroFactors: result.macro_context.macro_links.length }
+        : undefined,
     });
   }
-  if (result.decision?.recommendation) {
+
+  if (result.technical?.summary) {
+    const techSignal = (result.technical.signal || '').toLowerCase();
     insights.push({
-      id: 'decision',
-      agentName: 'Market Reaction',
-      signal: signalFromSentiment(result.decision.recommendation),
-      confidence: 75,
-      explanation: result.decision.recommendation,
+      id: 'technical',
+      agentName: 'Technical',
+      signal: techSignal === 'bullish' ? 'BULLISH' : techSignal === 'bearish' ? 'BEARISH' : 'NEUTRAL',
+      confidence: 70,
+      explanation: result.technical.summary,
       timestamp: now,
+      metrics: result.technical.indicators,
     });
-  } else if (result.market_reaction?.summary) {
+  }
+
+  if (result.market_reaction?.summary) {
     insights.push({
       id: 'market-reaction',
       agentName: 'Market Reaction',
-      signal: signalFromSentiment(result.market_reaction.summary),
+      signal: signalFromText(result.market_reaction.summary),
       confidence: 71,
       explanation: result.market_reaction.summary,
       timestamp: now,
     });
   }
+
   if (result.risk?.summary) {
     insights.push({
       id: 'risk',
@@ -70,28 +84,65 @@ function mapAgentsResultToInsights(result: AgentsRunResult | null): AgentInsight
     });
   }
 
-  if (insights.length > 0) return insights;
-  return [
-    { id: '1', agentName: 'Sentiment', signal: 'NEUTRAL', confidence: 0, explanation: 'Run agents to get insights. API may be unavailable.', timestamp: now },
-  ];
+  const decisionText = result.decision?.recommendation || result.recommendation || result.decision?.summary;
+  if (decisionText) {
+    insights.push({
+      id: 'decision',
+      agentName: 'Decision',
+      signal: signalFromText(decisionText),
+      confidence: 75,
+      explanation: decisionText,
+      timestamp: now,
+    });
+  }
+
+  return insights;
 }
 
 /** Fetches agent insights from /api/agents/run/ and updates agent store */
 export function useAgentInsights(ticker?: string) {
   const setInsights = useAgentStore((state) => state.setInsights);
 
-  const { data: result, isLoading } = useQuery({
+  const { data: result, isLoading, isError, error, isFetching } = useQuery({
     queryKey: ['agent-insights', ticker],
     queryFn: () => apiClient.getAgentInsights(ticker),
-    refetchInterval: 300000, // 5 min
+    refetchInterval: 300000,
     staleTime: 120000,
   });
 
   useEffect(() => {
-    if (!result) return;
-    const insights = mapAgentsResultToInsights(result);
-    setInsights(insights);
-  }, [result, setInsights]);
+    if (isLoading && !result) return;
+    if (!result) {
+      if (isError) {
+        setInsights([
+          {
+            id: 'api-error',
+            agentName: 'News Scout',
+            signal: 'NEUTRAL',
+            confidence: 0,
+            explanation:
+              'Could not reach the agent API. Ensure Django is running (see banner above).',
+            timestamp: new Date(),
+          },
+        ]);
+      }
+      return;
+    }
+    if (result.error) {
+      setInsights([
+        {
+          id: 'agent-error',
+          agentName: 'News Scout',
+          signal: 'NEUTRAL',
+          confidence: 0,
+          explanation: result.error,
+          timestamp: new Date(),
+        },
+      ]);
+      return;
+    }
+    setInsights(mapAgentsResultToInsights(result));
+  }, [result, isLoading, isError, setInsights]);
 
-  return { isLoading, result };
+  return { isLoading: isLoading || isFetching, result, isError, error };
 }
