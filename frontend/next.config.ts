@@ -1,6 +1,14 @@
 import type { NextConfig } from "next";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
+  // Ensure .env.local in frontend/ is loaded (not parent FNSA lockfile root)
+  turbopack: {
+    root: projectRoot,
+  },
   images: {
     remotePatterns: [
       {
@@ -15,9 +23,22 @@ const nextConfig: NextConfig = {
   },
   webpack(config) {
     // Grab the existing rule that handles SVG imports
-    const fileLoaderRule = config.module.rules.find((rule: any) =>
-      rule.test?.test?.('.svg'),
-    )
+    const rules = (config.module?.rules ?? []) as unknown[];
+    const fileLoaderRule = rules.find((rule) => {
+      if (!rule || typeof rule !== 'object') return false;
+      const r = rule as { test?: { test?: (s: string) => boolean } };
+      return Boolean(r.test?.test?.('.svg'));
+    }) as
+      | undefined
+      | {
+          test?: RegExp;
+          issuer?: unknown;
+          resourceQuery?: { not?: unknown[] };
+          exclude?: RegExp;
+        };
+
+    if (!fileLoaderRule) return config;
+    const resourceQueryNot = Array.isArray(fileLoaderRule.resourceQuery?.not) ? fileLoaderRule.resourceQuery!.not! : [];
 
     config.module.rules.push(
       // Reapply the existing rule, but only for svg imports ending in ?url
@@ -30,7 +51,7 @@ const nextConfig: NextConfig = {
       {
         test: /\.svg$/i,
         issuer: fileLoaderRule.issuer,
-        resourceQuery: { not: [...fileLoaderRule.resourceQuery.not, /url/] },
+        resourceQuery: { not: [...resourceQueryNot, /url/] },
         use: ['@svgr/webpack'],
       },
     )
