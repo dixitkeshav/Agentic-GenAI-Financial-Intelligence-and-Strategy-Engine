@@ -23,6 +23,7 @@ import {
   Newspaper,
   Brain,
   FlaskConical,
+  Zap,
   Briefcase,
   Settings,
   Search,
@@ -30,12 +31,15 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import Link from 'next/link';
+import { ApiConnectionBanner, ApiConnectionBadge } from '@/components/ApiConnectionBanner';
 
 const navigation = [
   { name: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
   { name: 'Markets', icon: TrendingUp, href: '/dashboard/markets' },
   { name: 'News Intelligence', icon: Newspaper, href: '/dashboard/news' },
   { name: 'Agent Insights', icon: Brain, href: '/dashboard/agents' },
+  { name: 'Shock Alert', icon: Zap, href: '/dashboard/shock' },
   { name: 'Screener', icon: Search, href: '/dashboard/scanner' },
   { name: 'Backtesting', icon: FlaskConical, href: '/dashboard/backtest' },
   { name: 'Options Chain', icon: TrendingUp, href: '/dashboard/options' },
@@ -69,10 +73,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   {navigation.map((item) => (
                     <SidebarMenuItem key={item.name}>
                       <SidebarMenuButton asChild>
-                        <a href={item.href} className="flex items-center gap-3">
+                        <Link href={item.href} className="flex items-center gap-3">
                           <item.icon className="w-4 h-4" />
                           <span>{item.name}</span>
-                        </a>
+                        </Link>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   ))}
@@ -99,6 +103,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
               {/* Market Status & Price Widgets */}
               <div className="flex items-center gap-3">
+                <ApiConnectionBadge />
                 <MarketStatus />
                 {indices.slice(0, 4).map((index) => (
                   <PriceWidget
@@ -128,8 +133,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </div>
           </header>
 
-          {/* Main Content */}
-          <main className="flex-1 overflow-hidden">{children}</main>
+          <ApiConnectionBanner />
+          {/* Main Content — allow vertical scroll (pages like Options / Backtest are tall) */}
+          <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">{children}</main>
         </div>
       </div>
     </SidebarProvider>
