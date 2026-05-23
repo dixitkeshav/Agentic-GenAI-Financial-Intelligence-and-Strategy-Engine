@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import path, include
 from .views import (
     dashboard,
     fetch_news,
@@ -41,4 +41,5 @@ urlpatterns = [
     path('api/evaluation/sentiment-accuracy/', evaluation_sentiment_accuracy, name='evaluation_sentiment_accuracy'),
     path('api/evaluation/latency/', evaluation_latency, name='evaluation_latency'),
     path('api/cross-domain/', cross_domain_news, name='cross_domain_news'),
+    path('api/shock/', include('shock_predictor.urls')),
 ]
