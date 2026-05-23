@@ -1,0 +1,106 @@
+// EDGE — Postgres persistence for candles, signals, backtests, watchlists, settings
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Completed OHLCV bars (persisted from session or historical backfill)
+model OHLCVCandle {
+  id        String   @id @default(cuid())
+  symbol    String
+  interval  String
+  time      DateTime
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    BigInt   @default(0)
+  oi        BigInt?
+
+  @@unique([symbol, interval, time])
+  @@index([symbol, interval, time])
+}
+
+/// AI/trading signals with full technical snapshot JSON
+model Signal {
+  id          String   @id @default(cuid())
+  symbol      String
+  timeframe   String
+  direction   String /// BUY | SELL
+  score       Int
+  confidence  Float?
+  narrative   Json? /// OpenAI-generated signal JSON when available
+  snapshot    Json /// TechnicalStateSnapshot serialized
+  candleTime  DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([symbol])
+  @@index([createdAt])
+}
+
+/// Single backtest run metadata + summary
+model BacktestRun {
+  id              String          @id @default(cuid())
+  symbol          String
+  interval        String
+  startDate       DateTime
+  endDate         DateTime
+  paramsJson      Json?
+  summaryJson     Json /// win rate, max DD, Sharpe, net P&L, etc.
+  equityCurveJson Json?
+  createdAt       DateTime        @default(now())
+  trades          BacktestTrade[]
+
+  @@index([symbol])
+  @@index([createdAt])
+}
+
+model BacktestTrade {
+  id         String      @id @default(cuid())
+  runId      String
+  run        BacktestRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  openedAt   DateTime
+  closedAt   DateTime?
+  direction  String
+  entry      Float
+  exitPrice  Float?
+  pnlPct     Float?
+  outcome    String? /// TARGET1 | TARGET2 | SL | OPEN
+  candleTime DateTime?
+  metaJson   Json?
+
+  @@index([runId])
+}
+
+model WatchlistSymbol {
+  id        String @id @default(cuid())
+  symbol    String
+  exchange  String? /// NSE | BSE | NFO ...
+  sortOrder Int    @default(0)
+
+  @@unique([symbol])
+}
+
+model Settings {
+  id                String   @id @default("singleton")
+  broker            String   @default("zerodha")
+  signalSensitivity String   @default("balanced")
+  enabledIndicators Json
+  watchlist         String[]
+  updatedAt         DateTime @updatedAt
+}
+
+model ConnectionLog {
+  id        String   @id @default(cuid())
+  broker    String
+  success   Boolean
+  profile   Json?
+  error     String?
+  createdAt DateTime @default(now())
+}
