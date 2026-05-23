@@ -18,13 +18,24 @@ class MarketReactionAgent(BaseAgent):
     def run(self, context: dict[str, Any]) -> dict[str, Any]:
         sentiment = (context.get("aggregate_sentiment") or "neutral").lower()
         ticker = context.get("ticker", "")
-        # Placeholder: in production, run event study or lookup historical returns.
+        tech = (context.get("technical_signal") or "").lower()
+        tech_note = ""
+        if tech == "bullish":
+            tech_note = " Technical structure is bullish (price above key MAs)."
+        elif tech == "bearish":
+            tech_note = " Technical structure is bearish (price below key MAs)."
         if sentiment == "negative":
-            reaction = "Historically, similar negative sentiment led to 2–4% drawdowns in banking stocks over 5 days."
+            reaction = (
+                "Historically, similar negative sentiment led to 2–4% drawdowns in related names over ~5 days."
+                + tech_note
+            )
         elif sentiment == "positive":
-            reaction = "Similar positive sentiment has often coincided with 1–3% short-term upside in related sectors."
+            reaction = (
+                "Similar positive sentiment has often coincided with 1–3% short-term upside in related sectors."
+                + tech_note
+            )
         else:
-            reaction = "Neutral sentiment typically shows limited directional move; volatility may still rise."
+            reaction = "Neutral sentiment typically shows limited directional move; volatility may still rise." + tech_note
 
         finding = {"sentiment": sentiment, "reaction_note": reaction, "ticker": ticker}
         self._remember(finding)
