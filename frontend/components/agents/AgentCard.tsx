@@ -4,18 +4,21 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { AgentInsight } from '@/store/agentStore';
 import { cn } from '@/lib/utils';
-import { TrendingUp, TrendingDown, Minus, Brain, Shield, Globe, Activity } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, Brain, Shield, Globe, Activity, LineChart, Scale, Newspaper } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 interface AgentCardProps {
   insight: AgentInsight;
 }
 
-const agentIcons = {
+const agentIcons: Record<string, typeof Brain> = {
+  'News Scout': Newspaper,
   Sentiment: Brain,
   Risk: Shield,
   Macro: Globe,
+  Technical: LineChart,
   'Market Reaction': Activity,
+  Decision: Scale,
 };
 
 const signalConfig = {
@@ -44,7 +47,7 @@ const signalConfig = {
 
 export function AgentCard({ insight }: AgentCardProps) {
   const config = signalConfig[insight.signal];
-  const AgentIcon = agentIcons[insight.agentName];
+  const AgentIcon = agentIcons[insight.agentName] ?? Brain;
   const SignalIcon = config.icon;
 
   return (
