@@ -8,12 +8,13 @@ import { MarketTicker } from '@/components/ticker/MarketTicker';
 import { useAgentStore } from '@/store/agentStore';
 import { useLiveTicker } from '@/hooks/useLiveTicker';
 import { useAgentInsights } from '@/hooks/useAgentInsights';
+import { AgentPipeline } from '@/components/agents/AgentPipeline';
 import { Brain } from 'lucide-react';
 
 export default function DashboardPage() {
   const insights = useAgentStore((state) => state.insights);
   useLiveTicker();
-  useAgentInsights();
+  const { isLoading: agentsLoading, result: agentsResult } = useAgentInsights();
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
@@ -47,12 +48,19 @@ export default function DashboardPage() {
           </div>
 
           {/* Agent Insights Grid */}
-          <div>
-            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold flex items-center gap-2">
               <Brain className="w-5 h-5 text-primary" />
               AI Agent Insights
             </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+            <AgentPipeline
+              steps={agentsResult?.pipeline}
+              isLoading={agentsLoading}
+              articleCount={agentsResult?.article_count}
+              newsSource={agentsResult?.news_source}
+              ticker={agentsResult?.ticker}
+            />
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
               {insights.map((insight) => (
                 <AgentCard key={insight.id} insight={insight} />
               ))}
