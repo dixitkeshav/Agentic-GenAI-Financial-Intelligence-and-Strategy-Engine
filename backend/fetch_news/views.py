@@ -5,11 +5,13 @@ from django.views.decorators.http import require_POST, require_GET
 from django.conf import settings
 from django.core.cache import cache
 import logging
+import math
 import requests
 import json
 import os
 from .models import NewsArticle
 from .sentiment import analyze_financial_sentiment
+from . import finnhub_client as fh
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
@@ -42,7 +44,48 @@ def fetch_news(request):
 
         feed = data.get("feed") or []
         if not feed:
-            # Avoid hard-failing the frontend.
+            # Finnhub fallback when Alpha has no feed (rate limit / empty).
+            if fh.is_configured():
+                fh_items = fh.market_news("general")
+                if fh_items:
+                    articles = []
+                    for item in fh_items[:20]:
+                        lab = "neutral"
+                        try:
+                            s, _ = analyze_financial_sentiment(
+                                ((item.get("title") or "") + " " + (item.get("summary") or ""))[:1500]
+                            )
+                            lab = (s or "neutral").lower()
+                        except Exception:
+                            pass
+                        articles.append(
+                            {
+                                "title": item.get("title", "No Title"),
+                                "summary": item.get("summary", ""),
+                                "url": item.get("url", "#"),
+                                "sentiment": lab,
+                                "source": item.get("source") or "Finnhub",
+                                "time_published": item.get("time_published", ""),
+                            }
+                        )
+                    try:
+                        for a in articles:
+                            title = (a.get("title") or "").strip()
+                            summary = (a.get("summary") or "").strip()
+                            if not title:
+                                continue
+                            NewsArticle.objects.update_or_create(
+                                title=title,
+                                defaults={"content": (summary or title)[:20000]},
+                            )
+                    except Exception:
+                        logger.exception("fetch_news: Finnhub persist failed")
+                    payload = {"articles": articles, "source": "finnhub"}
+                    try:
+                        cache.set(cache_key, payload, timeout=300)
+                    except Exception:
+                        pass
+                    return JsonResponse(payload)
             err = data.get("Note") or data.get("Error Message") or "No news found"
             payload = {"articles": [], "error": err}
             try:
@@ -77,7 +120,7 @@ def fetch_news(request):
         except Exception:
             logger.exception("fetch_news: failed to persist NewsArticle records")
 
-        payload = {'articles': articles}
+        payload = {"articles": articles, "source": "alpha_vantage"}
         try:
             cache.set(cache_key, payload, timeout=300)  # 5 min
         except Exception:
@@ -213,6 +256,10 @@ def custom_sentiment(request):
     if not ticker:
         return Response({"error": "No ticker provided."}, status=400)
     try:
+        if fh.is_configured():
+            out = fh.aggregate_sentiment_company_news(ticker, days=14)
+            out["source"] = "finnhub"
+            return Response(out)
         url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={ticker}&apikey={ALPHA_VANTAGE_API_KEY}&limit=15"
         r = requests.get(url, timeout=15)
         data = r.json()
@@ -229,7 +276,16 @@ def custom_sentiment(request):
         if pos > neg and pos > neu: sentiment = "positive"
         elif neg > pos and neg > neu: sentiment = "negative"
         else: sentiment = "neutral"
-        return Response({"sentiment": sentiment, "count": total, "positive": pos, "negative": neg, "neutral": neu})
+        return Response(
+            {
+                "sentiment": sentiment,
+                "count": total,
+                "positive": pos,
+                "negative": neg,
+                "neutral": neu,
+                "source": "alpha_vantage",
+            }
+        )
     except Exception as e:
         return Response({"error": str(e), "sentiment": "neutral"}, status=500)
 
@@ -255,10 +311,15 @@ def analyze_with_insights(request):
 # ——— Agentic AI: run multi-agent pipeline ———
 @api_view(['GET', 'POST'])
 def agents_run(request):
-    """Run News Scout, Macro, Market Reaction, Risk, Decision agents on current news (or provided articles)."""
+    """Run News Scout, Macro, Technical, Market Reaction, Risk, Decision agents on current news."""
     try:
+        import time as _time
+
+        fetch_started = _time.perf_counter()
+        news_source = "unknown"
         if request.method == 'POST' and request.data.get("articles"):
             articles = request.data["articles"]
+            news_source = "client"
         else:
             url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics=financial_markets&apikey={ALPHA_VANTAGE_API_KEY}&limit=25"
             try:
@@ -268,6 +329,7 @@ def agents_run(request):
                 feed = []
 
             if feed:
+                news_source = "alpha_vantage"
                 articles = [
                     {
                         "title": i.get("title", ""),
@@ -276,9 +338,16 @@ def agents_run(request):
                     }
                     for i in feed[:25]
                 ]
+            elif fh.is_configured():
+                news_source = "finnhub"
+                fh_items = fh.market_news("general")
+                articles = [
+                    {"title": x.get("title", ""), "summary": x.get("summary", ""), "sentiment": "neutral"}
+                    for x in fh_items[:25]
+                ]
             else:
-                # Fallback: avoid empty/timeout failures by using stored news + FinBERT sentiment.
                 from .sentiment import analyze_financial_sentiment
+                news_source = "database_finbert"
                 stored = list(
                     NewsArticle.objects.all()
                     .order_by("-published_at")
@@ -306,7 +375,10 @@ def agents_run(request):
                                 "sentiment": "neutral",
                             }
                         )
-        ticker = (request.data if request.method == "POST" else request.GET).get("ticker", "")
+
+        fetch_ms = (_time.perf_counter() - fetch_started) * 1000
+        req_data = request.data if request.method == "POST" else request.GET
+        ticker = (req_data.get("ticker") or "").strip()
         agg = "neutral"
         if articles:
             p = sum(1 for a in articles if (a.get("sentiment") or "").lower() == "positive")
@@ -315,7 +387,12 @@ def agents_run(request):
             elif n > p: agg = "negative"
         from agents.orchestrator import AgentOrchestrator
         orch = AgentOrchestrator()
-        result = orch.run(articles, ticker=ticker, aggregate_sentiment=agg)
+        result = orch.run(
+            articles,
+            ticker=ticker,
+            aggregate_sentiment=agg,
+            news_meta={"source": news_source, "fetch_ms": fetch_ms},
+        )
         return Response(result)
     except Exception as e:
         logger.exception("agents_run: %s", e)
@@ -343,14 +420,28 @@ def quant_signals(request):
 @api_view(['GET', 'POST'])
 def quant_backtest(request):
     """Run backtest: price-only vs sentiment strategy. GET: ticker=AAPL. POST: ticker, optional sentiment_series."""
-    ticker = (request.GET if request.method == "GET" else request.data).get("ticker", "AAPL")
+    qp = request.GET if request.method == "GET" else request.data
+    ticker = qp.get("ticker", "AAPL")
+    use_alpha = str(qp.get("use_alpha_sentiment", "true")).lower() not in ("false", "0", "no")
     sentiment_series = None
     if request.method == "POST" and request.data.get("sentiment_series"):
         import pandas as pd
         sentiment_series = pd.Series(request.data["sentiment_series"])
     try:
         from quant.backtest import run_backtest
-        result = run_backtest(ticker=ticker, sentiment_series=sentiment_series, days=252)
+        price_history = None
+        price_source = qp.get("price_source")
+        if request.method == "POST" and request.data.get("price_history"):
+            price_history = request.data["price_history"]
+        result = run_backtest(
+            ticker=ticker,
+            sentiment_series=sentiment_series,
+            days=252,
+            alpha_vantage_key=ALPHA_VANTAGE_API_KEY,
+            use_alpha_sentiment=use_alpha,
+            price_history=price_history,
+            price_source=price_source,
+        )
         return Response(result)
     except Exception as e:
         logger.exception("quant_backtest: %s", e)
@@ -415,23 +506,36 @@ def market_history(request, symbol: str):
     if period not in valid_periods:
         period = '1mo'
     try:
+        if fh.is_configured():
+            rows, err = fh.stock_candles(symbol, period)
+            if not err and rows:
+                return Response({"symbol": symbol, "history": rows, "source": "finnhub"})
+        import pandas as pd
         import yfinance as yf
+
         t = yf.Ticker(symbol)
         hist = t.history(period=period)
         if hist is None or hist.empty:
             return Response({"error": "No data", "history": []})
-        history = [
-            {
-                "timestamp": int(row.name.timestamp() * 1000),
-                "open": round(float(row["Open"]), 2),
-                "high": round(float(row["High"]), 2),
-                "low": round(float(row["Low"]), 2),
-                "close": round(float(row["Close"]), 2),
-                "volume": int(row["Volume"]) if "Volume" in row else 0,
-            }
-            for row in hist.itertuples()
-        ]
-        return Response({"symbol": symbol, "history": history})
+        history = []
+        for idx, row in hist.iterrows():
+            ms = int(pd.Timestamp(idx).timestamp() * 1000)
+            vol = row["Volume"] if "Volume" in row.index else 0
+            if pd.isna(vol):
+                vol = 0
+            else:
+                vol = int(vol)
+            history.append(
+                {
+                    "timestamp": ms,
+                    "open": round(float(row["Open"]), 2),
+                    "high": round(float(row["High"]), 2),
+                    "low": round(float(row["Low"]), 2),
+                    "close": round(float(row["Close"]), 2),
+                    "volume": vol,
+                }
+            )
+        return Response({"symbol": symbol, "history": history, "source": "yfinance"})
     except Exception as e:
         logger.warning("market_history: %s", e)
         return Response({"error": str(e), "history": []})
@@ -440,32 +544,70 @@ def market_history(request, symbol: str):
 # ——— Live ticker / indices (for scrolling strip: symbol, price, change) ———
 @api_view(['GET'])
 def live_ticker(request):
-    """Return list of { symbol, name, price, change_pct } for indices and popular tickers (yfinance)."""
+    """Return list of { symbol, name, price, change_pct } for indices and popular tickers (Finnhub preferred, else yfinance)."""
     try:
         import yfinance as yf
+
+        def _r2(x) -> float:
+            try:
+                v = float(x)
+                if not math.isfinite(v):
+                    return 0.0
+                return round(v, 2)
+            except (TypeError, ValueError):
+                return 0.0
+
         # Indices and a few liquid names for the ticker strip
         symbols = [
             "^GSPC", "^DJI", "^IXIC", "^NSEI", "^BSESN", "^N225", "^FTSE", "^GDAXI",
             "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "JPM", "RELIANCE.NS", "TCS.NS", "INFY.NS",
         ]
         out = []
-        for s in symbols:
+
+        def _yf_row(sym: str) -> dict | None:
             try:
-                t = yf.Ticker(s)
+                t = yf.Ticker(sym)
                 hist = t.history(period="5d")
-                info = t.info
-                name = info.get("shortName") or info.get("longName") or s
+                info = t.info or {}
+                name = str(info.get("shortName") or info.get("longName") or sym)[:30]
                 if hist is not None and len(hist) >= 2:
                     last = float(hist["Close"].iloc[-1])
                     prev = float(hist["Close"].iloc[-2])
                     ch = ((last - prev) / prev * 100) if prev else 0
                 else:
-                    last = info.get("regularMarketPrice") or info.get("previousClose") or 0
+                    last = float(info.get("regularMarketPrice") or info.get("previousClose") or 0)
                     ch = 0
-                out.append({"symbol": s, "name": name[:30], "price": round(last, 2), "change_pct": round(ch, 2)})
+                return {"symbol": sym, "name": name, "price": _r2(last), "change_pct": _r2(ch)}
             except Exception:
-                continue
-        return Response({"tickers": out})
+                return None
+
+        for s in symbols:
+            row = None
+            if fh.is_configured():
+                q = fh.quote(s)
+                if q is not None and q.get("c") is not None:
+                    prof = fh.company_profile2(s)
+                    name = str((prof or {}).get("name") or s)[:30]
+                    last = float(q.get("c") or 0)
+                    dp = q.get("dp")
+                    if dp is None and q.get("pc") not in (None, 0) and last:
+                        try:
+                            pc = float(q["pc"])
+                            dp = (float(q["c"]) - pc) / pc * 100.0 if pc else 0.0
+                        except Exception:
+                            dp = 0.0
+                    row = {
+                        "symbol": s,
+                        "name": name,
+                        "price": _r2(last),
+                        "change_pct": _r2(dp if dp is not None else 0),
+                    }
+            if row is None:
+                row = _yf_row(s)
+            if row:
+                out.append(row)
+        src = "finnhub" if fh.is_configured() else "yfinance"
+        return Response({"tickers": out, "source": src})
     except Exception as e:
         logger.warning("live_ticker: %s", e)
         return Response({"tickers": []})
@@ -499,6 +641,8 @@ def scanner(request):
         symbols_csv = "^NSEI,AAPL,MSFT,NVDA,RELIANCE.NS"
 
     symbols = [s.strip().upper() for s in symbols_csv.split(",") if s.strip()]
+    if len(symbols) > 25:
+        symbols = symbols[:25]
     period = request.GET.get("period", "3mo")
 
     def _alpha_sentiment_for_ticker(ticker: str) -> dict:
@@ -558,10 +702,20 @@ def scanner(request):
         except Exception:
             return {"momentum": 0.0, "start_price": None, "end_price": None}
 
+    use_fh = fh.is_configured()
+
     results = []
     for sym in symbols:
-        sent = _alpha_sentiment_for_ticker(sym)
-        mom = _momentum_for_symbol(sym)
+        if use_fh:
+            sent = fh.aggregate_sentiment_company_news(sym, days=14)
+        else:
+            sent = _alpha_sentiment_for_ticker(sym)
+        if use_fh:
+            mom = fh.momentum_from_candles(sym, period)
+            if mom.get("error"):
+                mom = _momentum_for_symbol(sym)
+        else:
+            mom = _momentum_for_symbol(sym)
 
         pos = sent.get("positive", 0) or 0
         neg = sent.get("negative", 0) or 0
@@ -572,7 +726,7 @@ def scanner(request):
         if count > 0:
             sentiment_score = float(pos - neg) / float(count)
 
-        momentum = mom.get("momentum", 0.0) or 0.0
+        momentum = float(mom.get("momentum", 0.0) or 0.0)
 
         if sentiment_score > 0 and momentum > 0:
             signal = "BULLISH"
@@ -603,75 +757,156 @@ def scanner(request):
             }
         )
 
-    return Response({"period": period, "results": results})
+    return Response({"period": period, "results": results, "source": "finnhub" if use_fh else "alpha_vantage_yfinance"})
 
 
-# ——— Options chain (US example via yfinance) ———
+def _sanitize_opt_num(val):
+    """JSON-safe: replace NaN/inf with None for REST responses."""
+    if val is None:
+        return None
+    try:
+        x = float(val)
+        if not math.isfinite(x):
+            return None
+        return x
+    except (TypeError, ValueError):
+        return None
+
+
+def _options_chain_yfinance(symbol: str, expiry: str) -> dict:
+    """Build options chain payload via yfinance (most reliable for US equities).
+
+    Strike matching uses rounded keys — raw float equality often fails between calls/puts DataFrames.
+    """
+    import yfinance as yf
+
+    t = yf.Ticker(symbol)
+    expiries = list(t.options or [])
+    if not expiries:
+        return {
+            "symbol": symbol,
+            "expiry": None,
+            "expiries": [],
+            "data": [],
+            "source": "yfinance",
+            "error": "No option expiries from Yahoo Finance (wrong symbol, no options, or rate limit).",
+        }
+
+    exp = expiry if expiry and expiry in expiries else expiries[0]
+    chain = t.option_chain(exp)
+    calls = chain.calls
+    puts = chain.puts
+    if calls is None or puts is None or (calls.empty and puts.empty):
+        return {
+            "symbol": symbol,
+            "expiry": exp,
+            "expiries": expiries[:10],
+            "data": [],
+            "source": "yfinance",
+            "error": "Empty calls/puts for this expiry (try another expiry or symbol).",
+        }
+
+    calls = calls.copy()
+    puts = puts.copy()
+    calls["strike_key"] = calls["strike"].astype(float).round(4)
+    puts["strike_key"] = puts["strike"].astype(float).round(4)
+    strike_keys = sorted(set(calls["strike_key"].tolist()) | set(puts["strike_key"].tolist()))
+
+    rows = []
+    for sk in strike_keys:
+        ce = calls[calls["strike_key"] == sk]
+        pe = puts[puts["strike_key"] == sk]
+        ce_row = ce.iloc[0].to_dict() if len(ce) else {}
+        pe_row = pe.iloc[0].to_dict() if len(pe) else {}
+        if not ce_row and not pe_row:
+            continue
+        rows.append(
+            {
+                "strike": float(sk),
+                "call": {
+                    "bid": _sanitize_opt_num(ce_row.get("bid")),
+                    "ask": _sanitize_opt_num(ce_row.get("ask")),
+                    "lastPrice": _sanitize_opt_num(ce_row.get("lastPrice")),
+                    "impliedVolatility": _sanitize_opt_num(ce_row.get("impliedVolatility")),
+                    "openInterest": _sanitize_opt_num(ce_row.get("openInterest")),
+                    "volume": _sanitize_opt_num(ce_row.get("volume")),
+                },
+                "put": {
+                    "bid": _sanitize_opt_num(pe_row.get("bid")),
+                    "ask": _sanitize_opt_num(pe_row.get("ask")),
+                    "lastPrice": _sanitize_opt_num(pe_row.get("lastPrice")),
+                    "impliedVolatility": _sanitize_opt_num(pe_row.get("impliedVolatility")),
+                    "openInterest": _sanitize_opt_num(pe_row.get("openInterest")),
+                    "volume": _sanitize_opt_num(pe_row.get("volume")),
+                },
+            }
+        )
+
+    return {
+        "symbol": symbol,
+        "expiry": exp,
+        "expiries": expiries[:10],
+        "data": rows,
+        "source": "yfinance",
+    }
+
+
+# ——— Options chain (yfinance first, Finnhub fallback for US) ———
 @api_view(["GET"])
 def options_chain(request):
     """
-    Options chain for a symbol (best-effort via yfinance).
-    For India NSE-style chains, you'll likely need a dedicated provider.
+    Options chain: try Yahoo Finance first (reliable for US names), then Finnhub for US if needed.
+    NSE/BSE chains are often unavailable from both; use liquid US symbols (e.g. AAPL) to verify.
     """
     symbol = (request.GET.get("symbol") or "").strip().upper()
     if not symbol:
         symbol = "AAPL"
     expiry = (request.GET.get("expiry") or "").strip()
 
-    cache_key = f"options_chain:{symbol}:{expiry or 'auto'}"
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return Response(cached)
+    cache_key = f"options_chain:v2:{symbol}:{expiry or 'auto'}"
+    if request.GET.get("nocache") != "1":
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
 
     try:
-        import yfinance as yf
-        t = yf.Ticker(symbol)
-        expiries = list(t.options or [])
-        if not expiries:
-            payload = {"symbol": symbol, "expiry": None, "expiries": [], "data": [], "error": "No options expiries found"}
-            cache.set(cache_key, payload, timeout=300)
+        payload = _options_chain_yfinance(symbol, expiry)
+        if payload.get("data"):
+            cache.set(cache_key, payload, timeout=120)
             return Response(payload)
 
-        if not expiry or expiry not in expiries:
-            expiry = expiries[0]
-
-        chain = t.option_chain(expiry)
-        calls = chain.calls
-        puts = chain.puts
-
-        strikes = sorted(set(calls["strike"].tolist()) | set(puts["strike"].tolist()))
-        rows = []
-        for strike in strikes:
-            ce = calls[calls["strike"] == strike]
-            pe = puts[puts["strike"] == strike]
-            ce_row = ce.iloc[0].to_dict() if len(ce) else {}
-            pe_row = pe.iloc[0].to_dict() if len(pe) else {}
-            rows.append(
-                {
-                    "strike": float(strike),
-                    "call": {
-                        "bid": ce_row.get("bid"),
-                        "ask": ce_row.get("ask"),
-                        "lastPrice": ce_row.get("lastPrice"),
-                        "impliedVolatility": ce_row.get("impliedVolatility"),
-                        "openInterest": ce_row.get("openInterest"),
-                        "volume": ce_row.get("volume"),
-                    },
-                    "put": {
-                        "bid": pe_row.get("bid"),
-                        "ask": pe_row.get("ask"),
-                        "lastPrice": pe_row.get("lastPrice"),
-                        "impliedVolatility": pe_row.get("impliedVolatility"),
-                        "openInterest": pe_row.get("openInterest"),
-                        "volume": pe_row.get("volume"),
-                    },
+        # Finnhub US-only fallback when yfinance returned no rows
+        if fh.is_configured():
+            sel, expiries, rows, err = fh.option_chain(symbol)
+            if not err and rows:
+                payload = {
+                    "symbol": symbol,
+                    "expiry": sel,
+                    "expiries": expiries[:10],
+                    "data": rows,
+                    "source": "finnhub",
                 }
-            )
+                cache.set(cache_key, payload, timeout=120)
+                return Response(payload)
 
-        payload = {"symbol": symbol, "expiry": expiry, "expiries": expiries[:10], "data": rows}
-        cache.set(cache_key, payload, timeout=60)
+        err_msg = payload.get("error") or "No chain data"
+        payload = {
+            "symbol": symbol,
+            "expiry": payload.get("expiry"),
+            "expiries": payload.get("expiries") or [],
+            "data": [],
+            "source": payload.get("source") or "yfinance",
+            "error": err_msg,
+        }
+        cache.set(cache_key, payload, timeout=30)
         return Response(payload)
     except Exception as e:
-        payload = {"symbol": symbol, "expiry": expiry or None, "expiries": [], "data": [], "error": str(e)}
-        cache.set(cache_key, payload, timeout=60)
+        payload = {
+            "symbol": symbol,
+            "expiry": expiry or None,
+            "expiries": [],
+            "data": [],
+            "error": str(e),
+        }
+        cache.set(cache_key, payload, timeout=30)
         return Response(payload)
