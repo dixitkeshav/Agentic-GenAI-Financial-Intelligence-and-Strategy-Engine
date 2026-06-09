@@ -1,12 +1,13 @@
 """
 Cross-domain news: crypto, commodities, FX, geopolitical.
-Uses Alpha Vantage topics when available; otherwise topic tags for downstream.
+Uses NewsAPI queries (with Alpha Vantage fallback when needed).
 """
 import logging
 import os
 from typing import Any
 
 import requests
+from fetch_news import newsapi_client as na
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,34 @@ TOPICS = {
 def fetch_domain_news(domain: str, limit: int = 20) -> list[dict]:
     """Fetch news for a domain (crypto, commodities, fx, geopolitical, etc.)."""
     topic = TOPICS.get(domain.lower(), "financial_markets")
+    query_by_domain = {
+        "crypto": "bitcoin OR ethereum OR crypto market",
+        "commodities": "commodities OR crude oil OR gold OR metal prices",
+        "fx": "forex OR currency market OR dollar index",
+        "geopolitical": "geopolitical OR sanctions OR war OR trade tensions",
+        "earnings": "earnings results OR quarterly results",
+        "ipo": "IPO OR listed today",
+        "mergers": "merger OR acquisition deal",
+        "financial_markets": "stock market OR equity market OR bonds OR central bank",
+    }
+    if na.is_configured():
+        items = na.get_everything(
+            query=query_by_domain.get(domain.lower(), query_by_domain["financial_markets"]),
+            language="en",
+            sort_by="publishedAt",
+            page_size=limit,
+        )
+        if items:
+            return [
+                {
+                    "title": item.get("title", ""),
+                    "summary": item.get("summary", ""),
+                    "url": item.get("url", ""),
+                    "sentiment": "neutral",
+                    "domain": domain,
+                }
+                for item in items[:limit]
+            ]
     if not ALPHA_VANTAGE_API_KEY:
         return []
     try:
