@@ -3,6 +3,13 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 
 export type SignalSensitivity = 'conservative' | 'balanced' | 'aggressive';
 
+export interface BrokerConnectionProfile {
+  user_shortname?: string;
+  user_name?: string;
+  user_id?: string;
+  email?: string;
+}
+
 export const sensitivityToThreshold: Record<SignalSensitivity, number> = {
   conservative: 7,
   balanced: 5,
@@ -32,7 +39,7 @@ export interface SettingsState {
   soundAlerts: boolean;
   watchlist: string[];
   isConnected: boolean;
-  connectionProfile: unknown | null;
+  connectionProfile: BrokerConnectionProfile | null;
   connectionFunds: { available: number; used: number } | null;
 
   updateSettings: (partial: Partial<SettingsState>) => void;
