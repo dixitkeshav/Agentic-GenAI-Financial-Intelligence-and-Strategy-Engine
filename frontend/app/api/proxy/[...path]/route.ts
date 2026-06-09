@@ -17,8 +17,10 @@ const HOP_BY_HOP = new Set([
 ]);
 
 async function proxyRequest(req: NextRequest, pathSegments: string[]) {
-  const path = pathSegments.join('/');
-  const target = new URL(`${DJANGO_ORIGIN}/${path}`);
+  const path = pathSegments.join('/').replace(/^\/+|\/+$/g, '');
+  // Django endpoints in this project are slash-terminated; always proxy with trailing slash.
+  const targetPath = path ? `/${path}/` : '/';
+  const target = new URL(`${DJANGO_ORIGIN}${targetPath}`);
   target.search = req.nextUrl.search;
 
   const headers = new Headers();
