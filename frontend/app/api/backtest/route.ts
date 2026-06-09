@@ -5,11 +5,17 @@ import { djangoApiUrl } from '@/lib/apiBase';
 import { getLastBrokerConfig } from '@/lib/broker';
 import { resolveNseEquityToken } from '@/lib/kite/resolveInstrument';
 
+function normalizeErrMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') return err;
+  return 'Unknown error';
+}
+
 async function fetchKiteHistory(
   ticker: string,
   apiKey: string,
   accessToken: string
-): Promise<{ history: { date: string; close: number }[]; instrumentToken: number }> {
+): Promise<{ history: { date: string; open: number; high: number; low: number; close: number; volume: number }[] }> {
   const token = await resolveNseEquityToken(ticker);
   if (!token) {
     throw new Error(`Symbol ${ticker} not found on NSE in Kite instruments list.`);
@@ -26,14 +32,31 @@ async function fetchKiteHistory(
   const history = rows
     .map((r) => ({
       date: new Date(r.date).toISOString(),
+      open: r.open,
+      high: r.high,
+      low: r.low,
       close: r.close,
+      volume: r.volume ?? 0,
     }))
     .filter((r) => Number.isFinite(r.close));
 
   if (history.length < 10) {
     throw new Error('Kite returned fewer than 10 daily candles.');
   }
-  return { history, instrumentToken: token };
+  return { history };
+}
+
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const ticker = (url.searchParams.get('ticker') || 'RELIANCE').trim().toUpperCase();
+  const djangoUrl = djangoApiUrl(`/api/quant/backtest/?templates=1&ticker=${encodeURIComponent(ticker)}`);
+  try {
+    const res = await fetch(djangoUrl, { cache: 'no-store' });
+    const data = await res.json();
+    return NextResponse.json(data, { status: res.status });
+  } catch (e) {
+    return NextResponse.json({ error: normalizeErrMessage(e) }, { status: 502 });
+  }
 }
 
 export async function POST(req: Request) {
@@ -42,63 +65,89 @@ export async function POST(req: Request) {
     useAlphaSentiment?: boolean;
     apiKey?: string;
     accessToken?: string;
+    useKite?: boolean;
+    mode?: string;
+    strategyId?: string;
+    strategyPrompt?: string;
+    onlyNewsEvents?: boolean;
+    days?: number;
+    startDate?: string;
+    endDate?: string;
+    periodLabel?: string;
+    customOnly?: boolean;
+    useGroqCompile?: boolean;
+    compiledRules?: unknown[];
   };
 
   const ticker = (body.ticker || 'RELIANCE').trim().toUpperCase();
-  const useAlphaSentiment = body.useAlphaSentiment !== false;
+  const mode = body.mode || '';
+  const isEnhanced = ['equity_intraday', 'equity_delivery', 'options', 'intraday', 'delivery'].includes(mode);
 
+  const useKite = body.useKite === true;
   let apiKey = body.apiKey || process.env.KITE_API_KEY || '';
   let accessToken = body.accessToken || process.env.KITE_ACCESS_TOKEN || '';
 
-  const session = getLastBrokerConfig();
-  if (session?.accessToken) {
-    apiKey = session.apiKey || apiKey;
-    accessToken = session.accessToken;
+  if (useKite) {
+    const session = getLastBrokerConfig();
+    if (session?.accessToken) {
+      apiKey = session.apiKey || apiKey;
+      accessToken = session.accessToken;
+    }
   }
 
-  let priceHistory: { date: string; close: number }[] | undefined;
+  let priceHistory: Record<string, unknown>[] | undefined;
   let priceSource: string | undefined;
   let kiteNote: string | undefined;
 
-  if (apiKey && accessToken) {
+  if (useKite && apiKey && accessToken) {
     try {
       const kiteData = await fetchKiteHistory(ticker, apiKey, accessToken);
       priceHistory = kiteData.history;
       priceSource = 'kite';
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn('Kite history fetch failed, falling back to yfinance:', msg);
-      kiteNote = msg.includes('Insufficient permission')
-        ? 'Kite historical API not enabled on your app — using Yahoo Finance (RELIANCE.NS).'
-        : `Kite: ${msg} — using Yahoo Finance fallback.`;
+      const msg = normalizeErrMessage(err);
+      kiteNote = `Kite: ${msg} — using Yahoo Finance fallback.`;
     }
-  } else {
-    kiteNote = 'No Kite access token — using Yahoo Finance for prices.';
   }
 
   const djangoUrl = djangoApiUrl('/api/quant/backtest/');
+  const payload: Record<string, unknown> = {
+    ticker,
+    price_history: priceHistory,
+    price_source: priceSource,
+  };
+
+  if (isEnhanced) {
+    payload.mode = mode === 'intraday' ? 'equity_intraday' : mode === 'delivery' ? 'equity_delivery' : mode;
+    payload.strategy_id = body.strategyId;
+    payload.strategy_prompt = body.strategyPrompt;
+    payload.only_news_events = body.onlyNewsEvents !== false;
+    payload.days = body.days ?? 126;
+    if (body.startDate) payload.start_date = body.startDate;
+    if (body.endDate) payload.end_date = body.endDate;
+    if (body.periodLabel) payload.period_label = body.periodLabel;
+    payload.custom_only = body.customOnly === true;
+    payload.use_groq_compile = body.useGroqCompile === true;
+    if (body.compiledRules?.length) {
+      payload.compiled_rules = body.compiledRules;
+    }
+  } else {
+    payload.use_alpha_sentiment = body.useAlphaSentiment !== false;
+  }
+
   let djangoRes: Response;
   try {
     djangoRes = await fetch(djangoUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ticker,
-        use_alpha_sentiment: useAlphaSentiment,
-        price_history: priceHistory,
-        price_source: priceSource,
-      }),
+      body: JSON.stringify(payload),
       cache: 'no-store',
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
       {
         error: 'Backend unreachable',
-        explanation: {
-          headline: 'Django API is not running.',
-          disclaimer: `Start: cd backend && python3 manage.py runserver. (${msg})`,
-        },
+        explanation: { headline: 'Start Django: cd backend && python3 manage.py runserver' },
       },
       { status: 502 }
     );
