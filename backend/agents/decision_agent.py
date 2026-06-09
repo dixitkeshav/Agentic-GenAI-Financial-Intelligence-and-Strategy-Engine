@@ -21,6 +21,49 @@ def _call_llm_debate(agent_summaries: list[str], context: dict) -> Optional[str]
     return chat_completion(prompt, system_content="", max_tokens=250)
 
 
+def _rule_decision(context: dict[str, Any]) -> dict[str, Any]:
+    outputs = context.get("agent_outputs", {})
+    debate = outputs.get("Debate", {}) or {}
+    committee = outputs.get("RiskCommittee", {}) or {}
+    risk_constraints = committee.get("constraints", {}) or {}
+    risk_flags = outputs.get("Risk", {}).get("risk_flags", []) or []
+    reaction = outputs.get("MarketReaction", {}).get("historical_reaction", "")
+    macro = outputs.get("MacroContext", {}).get("macro_links", []) or []
+
+    action = (debate.get("action") or "HOLD").upper()
+    stance = (debate.get("stance") or "neutral").lower()
+    confidence_gap = float(debate.get("confidence_gap") or 0.0)
+    risk_level = risk_constraints.get("risk_level", "moderate")
+    max_size = float(risk_constraints.get("max_position_fraction", 0.5))
+    sl = risk_constraints.get("stop_loss_pct", 2.5)
+    tp = risk_constraints.get("take_profit_pct", 4.0)
+
+    if risk_level == "high" and action != "HOLD":
+        action = "HOLD"
+        stance = "neutral"
+
+    headline = f"{action} with {max_size:.0%} max size ({risk_level} risk regime)."
+    reasons = []
+    if macro:
+        reasons.append(f"Macro context: {', '.join(macro[:2])}.")
+    if reaction:
+        reasons.append(reaction)
+    if risk_flags:
+        reasons.append(f"Primary risk flags: {'; '.join(risk_flags[:2])}.")
+
+    return {
+        "action": action,
+        "stance": stance,
+        "confidence_gap": round(confidence_gap, 3),
+        "risk_level": risk_level,
+        "position_size_cap": max_size,
+        "stop_loss_pct": sl,
+        "take_profit_pct": tp,
+        "headline": headline,
+        "reasons": reasons,
+    }
+
+
 class DecisionAgent(BaseAgent):
     """Synthesizes News Scout, Macro, Market Reaction, and Risk into a final recommendation."""
 
@@ -38,20 +81,32 @@ class DecisionAgent(BaseAgent):
 
         # Optional debate via LLM
         recommendation = _call_llm_debate(summaries, context)
+        structured = _rule_decision(context)
         if not recommendation:
-            # Rule-based synthesis
-            risk_flags = agent_outputs.get("Risk", {}).get("risk_flags", [])
-            reaction = agent_outputs.get("MarketReaction", {}).get("historical_reaction", "")
-            macro = agent_outputs.get("MacroContext", {}).get("macro_links", [])
+            td_ctx = context.get("truedata_context") or {}
+            td_factors = td_ctx.get("decision_factors") or {}
+            oi_gainers = int(td_factors.get("oi_gainers_count", 0) or 0)
+            oi_losers = int(td_factors.get("oi_losers_count", 0) or 0)
             recommendation = (
-                "Synthesis: Consider macro context (" + ", ".join(macro[:2]) + "). "
-                + reaction + " "
-                + ("Key risks: " + "; ".join(risk_flags[:2]) if risk_flags else "")
+                f"{structured['headline']} "
+                + " ".join(structured["reasons"])
+                + (
+                    f" Derivatives breadth (OI gainers {oi_gainers} vs losers {oi_losers}) informs short-term conviction."
+                    if (oi_gainers or oi_losers)
+                    else ""
+                )
             )
 
-        self._remember({"recommendation": recommendation, "inputs": list(agent_outputs.keys())})
+        self._remember(
+            {
+                "recommendation": recommendation,
+                "structured": structured,
+                "inputs": list(agent_outputs.keys()),
+            }
+        )
 
         return {
             "recommendation": recommendation,
             "summary": recommendation,
+            "structured_decision": structured,
         }
