@@ -4,6 +4,7 @@ __pycache__/
 
 # Environment
 .env
+.env.production
 
 # Database
 db.sqlite3
@@ -18,3 +19,6 @@ logs/
 # Virtual environment
 .venv/
 env/
+
+# Local confidential integrations (not for GitHub)
+backend/local_integrations/
