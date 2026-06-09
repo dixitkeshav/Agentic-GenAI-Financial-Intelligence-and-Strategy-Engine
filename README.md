@@ -184,6 +184,7 @@ There is also a **Symbol Deep-Dive** agent that performs a comprehensive single-
 
 ### 2. Multi-Agent Pipeline
 - **Mode A — Current-news:** News Scout → Macro → Market Reaction → Risk → Decision
+- **Mode A2 — Structured debate:** Bull Researcher vs Bear Researcher → Risk Committee constraints → Debate Facilitator → Decision
 - **Mode B — Symbol Deep-Dive:** Price + news + sector peers + prediction for one stock
 
 ### 3. Quant Layer
@@ -197,13 +198,19 @@ There is also a **Symbol Deep-Dive** agent that performs a comprehensive single-
 ### 5. Options Chain
 - Fetches live options data (calls + puts) via yfinance → Finnhub fallback
 
-### 6. Cross-Domain Analysis
+### 6. Intraday Decision + Trade Trace (V1)
+- Generates a lightweight intraday plan (`BUY`/`SELL`/`NO_TRADE`) with entry, SL, target, hold minutes
+- Tracks paper trade lifecycle on Markets chart (entry, SL/TP/time exit, simple trailing SL)
+- Full spec: `docs/TRADING_DECISION_V1.md`
+
+### 7. Cross-Domain Analysis
 - Tracks crypto, commodities, FX, geopolitical news
 - LLM reasoning chains: "Geopolitical tension → Oil ↑ → Inflation risk → Bank stocks ↓"
 
-### 7. Evaluation
+### 8. Evaluation
 - Sentiment accuracy vs manual labels (accuracy, macro F1)
 - Latency benchmark for sentiment analysis pipeline
+- Research benchmark harness with transaction costs/slippage and strategy comparison across Indian symbols/indices
 
 ---
 
@@ -277,8 +284,10 @@ cd backend && celery -A config worker -l info
 | `/api/agents/symbol-deep-dive/?symbol=AAPL` | GET | Full single-symbol deep dive |
 | `/api/scanner/` | GET | Multi-ticker momentum + sentiment screener |
 | `/api/options-chain/` | GET | Options chain (calls + puts) |
+| `/api/trade/decision/?symbol=^NSEI&hold_minutes=15` | GET | Intraday decision payload for chart trade overlays |
 | `/api/quant/signals/` | POST | Sentiment signals (momentum, MA, reversion) |
 | `/api/quant/backtest/` | POST | Backtest (Sharpe, IC, return) |
+| `/api/quant/research-benchmark/` | GET/POST | Research-grade multi-strategy benchmark with costs/slippage (India + optional global) |
 | `/api/evaluation/sentiment-accuracy/` | POST | Accuracy + F1 vs ground truth labels |
 | `/api/evaluation/latency/` | GET | FinBERT latency benchmark |
 | `/api/cross-domain/?domain=crypto` | GET | Cross-domain news + LLM reasoning |
