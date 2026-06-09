@@ -63,17 +63,54 @@ def classify_cause_type(headline: str, date=None) -> tuple[str, str]:
     """
     Rule-based keyword classifier. Returns (cause_type, summary_string).
     """
-    text_lower = (headline or '').lower()
+    return classify_cause_from_text(headline, date=date)
+
+
+def classify_cause_from_text(
+    text: str,
+    date=None,
+    headlines: list | None = None,
+) -> tuple[str, str]:
+    """
+    Classify shock cause from combined text and optional headline list.
+    """
+    parts = [text or ""]
+    if headlines:
+        for h in headlines:
+            if isinstance(h, dict):
+                parts.append(h.get("title", ""))
+                parts.append(h.get("summary", ""))
+            else:
+                parts.append(str(h))
+    blob = " ".join(parts).lower()
     scores = {}
+    matched_kw: dict[str, list[str]] = {k: [] for k in CAUSE_KEYWORDS}
     for cause, keywords in CAUSE_KEYWORDS.items():
-        scores[cause] = sum(1 for kw in keywords if _keyword_in_text(kw, text_lower))
+        for kw in keywords:
+            if _keyword_in_text(kw, blob):
+                scores[cause] = scores.get(cause, 0) + 1
+                matched_kw[cause].append(kw)
 
-    best_cause = max(scores, key=scores.get) if scores else 'unknown'
+    best_cause = max(scores, key=scores.get) if scores else "unknown"
     if scores.get(best_cause, 0) == 0:
-        best_cause = 'unknown'
+        best_cause = "unknown"
 
+    date_s = f" on {date}" if date else ""
+    top_h = ""
+    if headlines and isinstance(headlines[0], dict):
+        top_h = (headlines[0].get("title") or "")[:160]
+    elif text:
+        top_h = text[:160]
+
+    kw_sample = ", ".join(matched_kw.get(best_cause, [])[:5])
     summary = (
-        f"Classified as '{best_cause}' based on keyword match "
-        f"(score={scores.get(best_cause, 0)}). Headline: {(headline or '')[:120]}"
+        f"Likely {best_cause} shock{date_s}. "
+        f"Matched keywords: {kw_sample or 'none'}. "
+        f"Lead headline: {top_h}"
     )
+    if best_cause == "unknown" and ("budget" in blob or "tax" in blob or "stt" in blob):
+        best_cause = "policy"
+        summary = (
+            f"Policy/fiscal headline cluster{date_s} (budget/tax/STT keywords). Lead: {top_h}"
+        )
     return best_cause, summary
