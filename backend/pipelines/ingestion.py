@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 # Simple in-memory rate limit (per source). Redis can replace this.
 _last_call: dict[str, float] = {}
-_min_interval = 12.0  # Alpha Vantage free tier ~5/min; use 12s to be safe
+_min_interval = 1.5  # Keep small delay to avoid bursty provider calls.
 
 
 def rate_limit_safe(source: str = "default") -> bool:
@@ -25,7 +25,7 @@ def rate_limit_safe(source: str = "default") -> bool:
 def fetch_news_with_retry(
     fetch_fn: Callable[[], Any],
     max_retries: int = 2,
-    source: str = "alphavantage",
+    source: str = "newsapi",
 ) -> Any:
     """Call fetch_fn with rate limiting and retries."""
     for attempt in range(max_retries + 1):
