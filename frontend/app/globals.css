@@ -1,171 +1,41 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "../styles/fintelli.css";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
   --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
+  --color-ring: var(--ring);
   --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-destructive: var(--destructive);
   --color-card: var(--card);
-  --color-price-up: var(--price-up);
-  --color-price-down: var(--price-down);
-  --color-price-neutral: var(--price-neutral);
-  --color-glass-bg: var(--glass-bg);
-  --color-glass-border: var(--glass-border);
-  --radius-xs: 4px;
-  --radius-sm: 6px;
-  --radius-md: var(--radius);
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-2xl: 20px;
-  --radius-3xl: 24px;
-  --radius-4xl: 28px;
+  --color-card-foreground: var(--card-foreground);
 }
 
 :root {
   --radius: 8px;
-  
-  /* Financial Dashboard Dark Theme */
   --background: #0a0e1a;
   --foreground: #e4e7eb;
   --card: #131823;
   --card-foreground: #e4e7eb;
-  --popover: #1a1f2e;
-  --popover-foreground: #e4e7eb;
   --primary: #3b82f6;
   --primary-foreground: #ffffff;
-  --secondary: #1e293b;
-  --secondary-foreground: #e4e7eb;
   --muted: #1e293b;
   --muted-foreground: #94a3b8;
-  --accent: #2563eb;
-  --accent-foreground: #ffffff;
   --destructive: #ef4444;
   --border: rgba(255, 255, 255, 0.1);
-  --input: rgba(255, 255, 255, 0.1);
   --ring: #3b82f6;
-  
-  /* Financial Chart Colors */
-  --chart-1: #10b981;
-  --chart-2: #3b82f6;
-  --chart-3: #8b5cf6;
-  --chart-4: #f59e0b;
-  --chart-5: #ef4444;
-  
-  /* Price Movement Colors */
-  --price-up: #10b981;
-  --price-down: #ef4444;
-  --price-neutral: #94a3b8;
-  
-  /* Sidebar Colors */
-  --sidebar: #0f1419;
-  --sidebar-foreground: #e4e7eb;
-  --sidebar-primary: #3b82f6;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #1e293b;
-  --sidebar-accent-foreground: #e4e7eb;
-  --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: #3b82f6;
-  
-  /* Glassmorphism */
-  --glass-bg: rgba(19, 24, 35, 0.7);
-  --glass-border: rgba(255, 255, 255, 0.1);
-}
-
-.dark {
-  --background: #0a0e1a;
-  --foreground: #e4e7eb;
-  --card: #131823;
-  --card-foreground: #e4e7eb;
-  --popover: #1a1f2e;
-  --popover-foreground: #e4e7eb;
-  --primary: #3b82f6;
-  --primary-foreground: #ffffff;
-  --secondary: #1e293b;
-  --secondary-foreground: #e4e7eb;
-  --muted: #1e293b;
-  --muted-foreground: #94a3b8;
-  --accent: #2563eb;
-  --accent-foreground: #ffffff;
-  --destructive: #ef4444;
-  --border: rgba(255, 255, 255, 0.1);
-  --input: rgba(255, 255, 255, 0.1);
-  --ring: #3b82f6;
-  --chart-1: #10b981;
-  --chart-2: #3b82f6;
-  --chart-3: #8b5cf6;
-  --chart-4: #f59e0b;
-  --chart-5: #ef4444;
-  --sidebar: #0f1419;
-  --sidebar-foreground: #e4e7eb;
-  --sidebar-primary: #3b82f6;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #1e293b;
-  --sidebar-accent-foreground: #e4e7eb;
-  --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: #3b82f6;
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
-  body {
-    @apply bg-background text-foreground font-sans antialiased;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  }
-}
-
-@utility glass-effect {
-  background: var(--color-glass-bg);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid var(--color-glass-border);
-}
-
-@utility price-flash-up {
-  animation: flashUp 0.6s ease-in-out;
-}
-
-@utility price-flash-down {
-  animation: flashDown 0.6s ease-in-out;
-}
-
-@keyframes flashUp {
-  0%, 100% { background-color: transparent; }
-  50% { background-color: rgba(16, 185, 129, 0.2); }
-}
-
-@keyframes flashDown {
-  0%, 100% { background-color: transparent; }
-  50% { background-color: rgba(239, 68, 68, 0.2); }
 }
