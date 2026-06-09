@@ -99,18 +99,29 @@ function mapAgentsResultToInsights(result: AgentsRunResult | null): AgentInsight
   return insights;
 }
 
+export type AgentInsightsOptions = {
+  selectedIndicators?: string[];
+  selectedPatterns?: string[];
+};
+
 /** Fetches agent insights from /api/agents/run/ and updates agent store */
-export function useAgentInsights(ticker?: string) {
+export function useAgentInsights(ticker?: string, options?: AgentInsightsOptions) {
   const setInsights = useAgentStore((state) => state.setInsights);
 
   const { data: result, isLoading, isError, error, isFetching } = useQuery({
-    queryKey: ['agent-insights', ticker],
-    queryFn: () => apiClient.getAgentInsights(ticker),
+    queryKey: ['agent-insights', ticker, options?.selectedIndicators?.join(','), options?.selectedPatterns?.join(',')],
+    queryFn: () =>
+      apiClient.getAgentInsights(ticker, {
+        selectedIndicators: options?.selectedIndicators,
+        selectedPatterns: options?.selectedPatterns,
+      }),
+    enabled: Boolean(ticker),
     refetchInterval: 300000,
     staleTime: 120000,
   });
 
   useEffect(() => {
+    if (!ticker) return;
     if (isLoading && !result) return;
     if (!result) {
       if (isError) {
@@ -142,7 +153,7 @@ export function useAgentInsights(ticker?: string) {
       return;
     }
     setInsights(mapAgentsResultToInsights(result));
-  }, [result, isLoading, isError, setInsights]);
+  }, [result, isLoading, isError, setInsights, ticker]);
 
   return { isLoading: isLoading || isFetching, result, isError, error };
 }
