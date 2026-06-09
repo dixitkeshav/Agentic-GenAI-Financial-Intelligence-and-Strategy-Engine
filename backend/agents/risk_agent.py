@@ -19,6 +19,8 @@ class RiskAgent(BaseAgent):
         articles = context.get("articles", [])
         spike = context.get("spike_detected", False)
         spike_direction = context.get("spike_direction")
+        td_ctx = context.get("truedata_context") or {}
+        td_factors = td_ctx.get("decision_factors") or {}
 
         flags = []
         if spike and spike_direction == "negative":
@@ -31,6 +33,17 @@ class RiskAgent(BaseAgent):
         neg_count = sum(1 for a in articles if (a.get("sentiment") or "").lower() == "negative")
         if len(articles) and neg_count / len(articles) >= 0.7:
             flags.append("Tail risk: majority negative news — consider hedging")
+
+        try:
+            oi_gainers = int(td_factors.get("oi_gainers_count", 0) or 0)
+            oi_losers = int(td_factors.get("oi_losers_count", 0) or 0)
+            corp_actions = int(td_factors.get("corporate_actions_count", 0) or 0)
+            if oi_losers > oi_gainers and oi_losers - oi_gainers >= 3:
+                flags.append("Derivatives risk: OI losers dominate, positioning may be weakening")
+            if corp_actions >= 5:
+                flags.append("Event risk: elevated corporate actions flow may increase volatility")
+        except Exception:
+            pass
 
         finding = {"flags": flags, "spike": spike}
         self._remember(finding)
