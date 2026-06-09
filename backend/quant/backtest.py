@@ -1,30 +1,35 @@
 """
 Simple backtester: compare price-only vs price + sentiment strategy.
-Uses pandas and optional yfinance for price data; optional Alpha Vantage news sentiment.
+Uses pandas and optional yfinance for price data; NewsAPI is primary for headline sentiment.
 """
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
-import requests
+from fetch_news import truedata_bridge as td
+from fetch_news import newsapi_client as na
+from fetch_news.sentiment import analyze_financial_sentiment
 
 logger = logging.getLogger(__name__)
 
 
 def _normalize_ticker_for_yfinance(ticker: str) -> str:
-    """Map bare Indian symbols (RELIANCE) to Yahoo format (RELIANCE.NS)."""
+    """Normalize ticker casing/spacing without forcing an exchange suffix."""
     t = (ticker or "").strip().upper()
-    if not t or t.startswith("^"):
-        return t
-    if "." in t:
-        return t
-    if t.isalpha() and 1 <= len(t) <= 20:
-        return f"{t}.NS"
     return t
+
+
+def _candidate_yfinance_symbols(ticker: str) -> list[str]:
+    """Try base symbol first, then NSE suffix for Indian equities."""
+    t = _normalize_ticker_for_yfinance(ticker)
+    if not t:
+        return []
+    if t.startswith("^") or "." in t:
+        return [t]
+    return [t, f"{t}.NS"]
 
 
 def _fetch_prices(ticker: str, days: int = 252) -> Optional[pd.Series]:
@@ -32,61 +37,70 @@ def _fetch_prices(ticker: str, days: int = 252) -> Optional[pd.Series]:
     try:
         import yfinance as yf
 
-        yf_symbol = _normalize_ticker_for_yfinance(ticker)
-        hist = yf.Ticker(yf_symbol).history(period="1y" if days >= 252 else f"{max(days, 30)}d")
-        if hist is None or hist.empty:
-            return None
-        closes = hist["Close"].dropna()
-        if len(closes) < 10:
-            return None
-        if getattr(closes.index, "tz", None) is not None:
-            closes.index = closes.index.tz_localize(None)
-        return closes
+        period = "1y" if days >= 252 else f"{max(days, 30)}d"
+        for yf_symbol in _candidate_yfinance_symbols(ticker):
+            hist = yf.Ticker(yf_symbol).history(period=period)
+            if hist is None or hist.empty:
+                continue
+            closes = hist["Close"].dropna()
+            if len(closes) < 10:
+                continue
+            if getattr(closes.index, "tz", None) is not None:
+                closes.index = closes.index.tz_localize(None)
+            return closes
+        return None
     except Exception as e:
         logger.warning("yfinance fetch failed for %s: %s", ticker, e)
         return None
 
 
-def _fetch_alpha_sentiment_series(ticker: str, api_key: str) -> Optional[pd.Series]:
+def _fetch_newsapi_sentiment_series(ticker: str, days: int = 252) -> Optional[pd.Series]:
     """
-    Aggregate Alpha Vantage NEWS_SENTIMENT article scores by calendar day.
+    Aggregate NewsAPI headline sentiment scores by calendar day.
     Returns a Series indexed by date (timezone-naive) with mean sentiment score per day.
     """
-    if not api_key or api_key == "YOUR_API_KEY_HERE":
+    if not na.is_configured():
         return None
-    url = (
-        "https://www.alphavantage.co/query"
-        f"?function=NEWS_SENTIMENT&tickers={ticker}&apikey={api_key}&limit=200"
-    )
     try:
-        r = requests.get(url, timeout=30)
-        data = r.json()
-        feed = data.get("feed") or []
-        if not feed:
+        from_dt = pd.Timestamp.utcnow().normalize() - pd.Timedelta(days=max(30, days))
+        items = na.fetch_symbol_news(
+            ticker,
+            limit=100,
+            from_param=from_dt.date().isoformat(),
+            to=pd.Timestamp.utcnow().date().isoformat(),
+        )
+        if not items:
             return None
     except Exception as e:
-        logger.warning("Alpha sentiment fetch failed: %s", e)
+        logger.warning("NewsAPI sentiment fetch failed: %s", e)
         return None
 
     from collections import defaultdict
     from datetime import datetime
 
     by_day: dict[Any, list[float]] = defaultdict(list)
-    for item in feed:
-        score = item.get("overall_sentiment_score")
-        if score is None:
+    for item in items:
+        text = ((item.get("title") or "") + " " + (item.get("summary") or ""))[:1500]
+        if not text.strip():
             continue
         try:
-            sc = float(score)
-        except (TypeError, ValueError):
+            sent, probs = analyze_financial_sentiment(text)
+            label = (sent or "neutral").lower()
+            if label == "positive":
+                sc = float(probs[2] - probs[0])
+            elif label == "negative":
+                sc = float(probs[2] - probs[0])
+            else:
+                sc = float(probs[2] - probs[0])
+        except Exception:
             continue
+
         tp = item.get("time_published") or ""
-        if len(tp) >= 8:
-            try:
-                dt = datetime.strptime(tp[:8], "%Y%m%d").date()
-                by_day[pd.Timestamp(dt)].append(sc)
-            except ValueError:
-                continue
+        try:
+            dt = datetime.fromisoformat(tp.replace("Z", "+00:00")).date()
+        except ValueError:
+            continue
+        by_day[pd.Timestamp(dt)].append(sc)
 
     if not by_day:
         return None
@@ -196,10 +210,10 @@ def _build_explanation(
             f"Volatility has been relatively moderate compared with many single names (≈{vol*100:.0f}% annualized)."
         )
 
-    if sentiment_source in ("alpha_vantage", "user") and ic is not None:
+    if sentiment_source in ("newsapi", "user") and ic is not None:
         if ic > 0.05:
             why.append(
-                "News sentiment scores from Alpha Vantage show a weak positive link with next-day returns in this sample (information coefficient > 0)."
+                "News sentiment scores from NewsAPI headlines show a weak positive link with next-day returns in this sample (information coefficient > 0)."
             )
         elif ic < -0.05:
             why.append(
@@ -227,7 +241,7 @@ def _build_explanation(
             f"Strategy Sharpe: {strategy_sharpe:.2f} vs buy-and-hold Sharpe: {price_only_sharpe:.2f}. "
             "This is a toy model and not a trading recommendation."
         )
-    elif sentiment_source == "alpha_vantage" and strategy_sharpe is not None:
+    elif sentiment_source == "newsapi" and strategy_sharpe is not None:
         strat_note = (
             f"Strategy uses daily news sentiment scores (sign of score) to flip long vs short vs cash. "
             f"Strategy Sharpe: {strategy_sharpe:.2f} vs buy-and-hold Sharpe: {price_only_sharpe:.2f}. "
@@ -242,7 +256,7 @@ def _build_explanation(
         "methodology": (
             "We use daily close prices from Yahoo Finance (yfinance). "
             "Buy-and-hold Sharpe uses daily log returns. "
-            "When sentiment is enabled, we align Alpha Vantage’s news sentiment scores per day "
+            "When sentiment is enabled, we align NewsAPI-derived headline sentiment scores per day "
             "to trading days, forward-fill missing days, and use the sign of the score to scale "
             "daily returns (long if positive, short if negative). "
             "This does not predict the future; it summarizes historical behavior in the sample."
@@ -280,6 +294,13 @@ def _prices_from_history_payload(history: list[dict]) -> Optional[pd.Series]:
     return pd.Series(vals, index=idx).sort_index()
 
 
+def _prices_from_truedata(symbol: str, days: int = 365) -> Optional[pd.Series]:
+    rows = td.get_price_history(symbol=symbol, days=days)
+    if not rows:
+        return None
+    return _prices_from_history_payload(rows)
+
+
 def run_backtest(
     ticker: str = "AAPL",
     sentiment_series: Optional[pd.Series] = None,
@@ -291,26 +312,31 @@ def run_backtest(
 ) -> dict[str, Any]:
     """
     Run backtest: buy-and-hold vs sentiment-based (signal = sign(sentiment)).
-    If sentiment_series is None and use_alpha_sentiment is True, tries Alpha Vantage NEWS_SENTIMENT.
+    If sentiment_series is None and use_alpha_sentiment is True, tries NewsAPI-derived headline sentiment.
     If price_history is provided (e.g. from Kite), uses that instead of yfinance.
     """
-    key = alpha_vantage_key or os.getenv("ALPHA_VANTAGE_API_KEY", "")
+    _ = alpha_vantage_key  # Backward-compatible argument; not used when NewsAPI is primary.
     sentiment_source = "none"
 
     if sentiment_series is not None and len(sentiment_series) > 0:
         sentiment_source = "user"
     elif use_alpha_sentiment:
-        sentiment_series = _fetch_alpha_sentiment_series(ticker, key)
+        sentiment_series = _fetch_newsapi_sentiment_series(ticker, days=days)
         if sentiment_series is not None and len(sentiment_series) > 0:
-            sentiment_source = "alpha_vantage"
+            sentiment_source = "newsapi"
 
     prices = _prices_from_history_payload(price_history or [])
     data_source = price_source or ("kite" if prices is not None and len(prices) >= 10 else "yfinance")
     if prices is None or len(prices) < 10:
         prices = _fetch_prices(ticker, days)
         data_source = "yfinance"
+    if (prices is None or len(prices) < 10) and td.is_available():
+        td_prices = _prices_from_truedata(ticker, days=days)
+        if td_prices is not None and len(td_prices) >= 10:
+            prices = td_prices
+            data_source = "truedata"
     if prices is None or len(prices) < 10:
-        yf_hint = _normalize_ticker_for_yfinance(ticker)
+        yf_hint = ", ".join(_candidate_yfinance_symbols(ticker)) or _normalize_ticker_for_yfinance(ticker)
         return {
             "error": "Could not fetch price data",
             "ticker": ticker,
@@ -322,8 +348,7 @@ def run_backtest(
                 "headline": f"Could not load price history for {ticker}.",
                 "disclaimer": (
                     f"Tried Yahoo Finance as {yf_hint}. "
-                    "For Indian stocks use RELIANCE or RELIANCE.NS. "
-                    "If Kite was used: enable Historical API on your Kite Connect app at developers.kite.trade."
+                    "For Indian stocks use RELIANCE or RELIANCE.NS."
                 ),
             },
         }
@@ -364,6 +389,11 @@ def run_backtest(
     if data_source == "kite":
         explanation["methodology"] = (
             "Daily close prices from Zerodha Kite Connect (NSE). "
+            + explanation.get("methodology", "")
+        )
+    elif data_source == "truedata":
+        explanation["methodology"] = (
+            "Daily close prices from TrueData historical services. "
             + explanation.get("methodology", "")
         )
 
