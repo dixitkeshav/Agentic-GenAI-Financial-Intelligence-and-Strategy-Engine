@@ -4,6 +4,7 @@ djangorestframework>=3.14
 django-cors-headers>=4.3
 python-dotenv>=1.0
 requests>=2.31
+newsapi-python>=0.2.7
 feedparser>=6.0.10
 python-telegram-bot>=21.3
 ta>=0.11.0
@@ -42,3 +43,6 @@ scipy>=1.11
 structlog>=24.1
 pyyaml>=6.0
 beautifulsoup4>=4.12
+
+# Optional market-data providers
+truedata-ws>=5.0
