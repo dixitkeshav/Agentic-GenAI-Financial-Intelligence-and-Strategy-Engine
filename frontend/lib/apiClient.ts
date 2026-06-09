@@ -23,11 +23,10 @@ async function djangoJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await djangoFetch(path, init);
   const data = (await response.json().catch(() => ({}))) as T & { error?: string; detail?: string };
   if (!response.ok) {
-    const msg =
-      (data as { error?: string }).error ||
-      (data as { detail?: string }).detail ||
-      `Request failed (${response.status})`;
-    throw new ApiError(msg, response.status, data);
+    // Many dashboard calls are best-effort (polling). Return the parsed body instead
+    // of throwing to avoid noisy stack traces during backend warmup/outages.
+    // Callers can check `error` / `detail` fields when they care.
+    return data as unknown as T;
   }
   return data;
 }
@@ -92,15 +91,39 @@ export interface ShockHistoryRow {
   magnitude: number;
   intraday_range: number;
   cause_type: string;
+  cause_summary?: string;
   headline: string;
   index?: string;
+  news_evidence?: Array<{ title?: string; summary?: string; source?: string; url?: string }>;
+  threshold_points?: number;
+}
+
+export interface QuantCatalogItem {
+  id: string;
+  name: string;
+  category?: string;
+  computed?: boolean;
+}
+
+export interface QuantCatalog {
+  indicators: QuantCatalogItem[];
+  candlestick_patterns: QuantCatalogItem[];
+  strategies: Array<{ id: string; name: string; description?: string }>;
+  indicator_count?: number;
+  pattern_count?: number;
+  strategy_count?: number;
 }
 
 export interface AgentsRunResult {
   error?: string;
   news_scout: { summary?: string; spike_detected?: boolean; spike_direction?: string };
   macro_context: { summary?: string; macro_links?: string[] };
-  technical?: { summary?: string; signal?: string; indicators?: Record<string, number> };
+  technical?: {
+    summary?: string;
+    signal?: string;
+    indicators?: Record<string, number | null>;
+    candlestick_patterns?: Array<{ id: string; name: string }>;
+  };
   market_reaction: { summary?: string; historical_reaction?: string };
   risk: { summary?: string; risk_flags?: string[] };
   shock?: {
@@ -114,12 +137,95 @@ export interface AgentsRunResult {
   pipeline?: PipelineStep[];
   article_count?: number;
   news_source?: string;
+  news_sources?: Record<string, number>;
   ticker?: string | null;
+  selected_indicators?: string[];
+}
+
+export type BacktestMode = 'equity_intraday' | 'equity_delivery' | 'options' | 'legacy';
+
+export interface BacktestTradeNews {
+  title: string;
+  summary?: string;
+  url?: string;
+  source?: string;
+  sentiment?: string;
+  sentiment_score?: number;
+  relevance?: string | number;
+}
+
+export interface BacktestTradeExecution {
+  decision: string;
+  entry_date: string;
+  entry_time: string;
+  exit_date: string;
+  exit_time: string;
+  entry_price: number;
+  exit_price: number;
+  stop_loss_price?: number | null;
+  take_profit_price?: number | null;
+  stop_loss_pct?: number | null;
+  take_profit_pct?: number | null;
+  strike?: number;
+  strike_step?: number;
+  strike_source?: string | null;
+  option_expiry?: string | null;
+  option_structure?: string | null;
+  option_legs?: Array<{ leg: string; strike: number }> | null;
+  chain_source?: string | null;
+  session?: string;
+  bar_ohlc?: { open: number; high: number; low: number; close: number };
+}
+
+export interface BacktestTrade {
+  date: string;
+  action: string;
+  hold_type?: string;
+  pnl_pct: number;
+  execution?: BacktestTradeExecution;
+  news: BacktestTradeNews[];
+  metrics: {
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume?: number;
+    day_return_pct?: number;
+    rsi?: number | null;
+    mfi?: number | null;
+    macd_hist?: number | null;
+    bb_pct?: number | null;
+    vwap_dist?: number | null;
+    zigzag_trend?: number | null;
+    avg_news_sentiment?: number;
+  };
+  reason: string;
+  rules_matched?: unknown[];
+}
+
+export interface BacktestStrategyTemplate {
+  id: string;
+  name: string;
+  description: string;
+  mode_hint?: string;
+  requires_news?: boolean;
+  options_structure?: string;
 }
 
 export interface BacktestResult {
   error?: string;
   ticker?: string;
+  mode?: string;
+  period?: {
+    start?: string;
+    end?: string;
+    days_requested?: number;
+    start_date?: string | null;
+    end_date?: string | null;
+    bars_in_range?: number;
+    label?: string;
+  };
+  only_news_events?: boolean;
   price_source?: string;
   kite_used?: boolean;
   kite_note?: string;
@@ -131,6 +237,38 @@ export interface BacktestResult {
   total_return_price?: number | null;
   total_return_strategy?: number | null;
   num_days?: number;
+  options_chain?: {
+    available: boolean;
+    proxy?: boolean;
+    source?: string;
+    note?: string;
+    expiries_count?: number;
+    chain_rows?: number;
+    nearest_expiry?: string | null;
+    symbol_checked?: string;
+    symbols_tried?: string[];
+    error?: string;
+  };
+  strategy?: {
+    id?: string;
+    name?: string;
+    description?: string;
+    parsed_rules?: unknown[];
+    custom_prompt?: string;
+    options_structure?: string;
+    compile?: CompiledStrategy;
+  };
+  summary?: {
+    total_trades: number;
+    winning_trades: number;
+    win_rate_pct: number;
+    total_return_pct: number;
+    news_articles_considered: number;
+    trading_days_in_sample: number;
+  };
+  trades?: BacktestTrade[];
+  news_pool?: Array<BacktestTradeNews & { date?: string }>;
+  templates?: BacktestStrategyTemplate[];
   recent_price_context?: {
     approx_return_1m?: number | null;
     approx_return_3m?: number | null;
@@ -145,6 +283,33 @@ export interface BacktestResult {
     strategy_note?: string;
     disclaimer?: string;
   };
+}
+
+export interface CompiledStrategy {
+  rules?: unknown[];
+  action?: string;
+  options_structure?: string | null;
+  risk_reward?: { stop_loss_pct?: number; take_profit_pct?: number };
+  normalized_prompt?: string;
+  fixes_applied?: string[];
+  source?: string;
+}
+
+export interface BacktestRunOptions {
+  mode?: BacktestMode;
+  strategyId?: string;
+  strategyPrompt?: string;
+  onlyNewsEvents?: boolean;
+  days?: number;
+  startDate?: string;
+  endDate?: string;
+  periodLabel?: string;
+  customOnly?: boolean;
+  useGroqCompile?: boolean;
+  compiledRules?: unknown[];
+  useAlphaSentiment?: boolean;
+  useKite?: boolean;
+  kiteCredentials?: { apiKey?: string; accessToken?: string };
 }
 
 export interface ScannerResultItem {
@@ -165,6 +330,7 @@ export interface ScannerResultItem {
 export interface ScannerResponse {
   period: string;
   results: ScannerResultItem[];
+  source?: string;
 }
 
 export interface OptionsChainSide {
@@ -192,6 +358,24 @@ export interface OptionsChainResponse {
   source?: string;
 }
 
+export type IntradayDecisionType = 'BUY' | 'SELL' | 'NO_TRADE';
+
+export interface IntradayTradeDecision {
+  symbol: string;
+  decision: IntradayDecisionType;
+  reason: string;
+  confidence: number;
+  hold_minutes: number;
+  entry_price: number | null;
+  stop_loss: number | null;
+  target_price: number | null;
+  expected_move_pct: number;
+  expected_profit_pct: number;
+  risk_reward?: number | null;
+  generated_at: string;
+  price_source?: string;
+}
+
 function isSentiment(x: string): x is 'positive' | 'negative' | 'neutral' {
   return x === 'positive' || x === 'negative' || x === 'neutral';
 }
@@ -215,12 +399,12 @@ export const apiClient = {
     }
   },
 
-  /** Fetch news from /api/fetch-news/ (Alpha Vantage NEWS_SENTIMENT) */
+  /** Fetch news from /api/fetch-news/ (NewsAPI primary, Alpha Vantage fallback) */
   async getNews(limit = 50): Promise<NewsItem[]> {
     try {
-      const response = await djangoFetch('/api/fetch-news/');
-      if (!response.ok) throw new Error('Failed to fetch news');
-      const data = await response.json();
+      const data = await djangoJson<{ articles?: Record<string, unknown>[]; error?: string }>(
+        '/api/fetch-news/?providers=newsapi,alpha_vantage'
+      );
       const articles = data.articles || [];
       if (data.error && !articles.length) {
         // Treat upstream "no feed / rate limit" as an empty result.
@@ -282,10 +466,28 @@ export const apiClient = {
   },
 
   /** Run multi-agent pipeline and return unified insights */
-  async getAgentInsights(ticker?: string): Promise<AgentsRunResult | null> {
+  async getQuantCatalog(): Promise<QuantCatalog | null> {
     try {
-      const body: { ticker?: string } = {};
+      return await djangoJson<QuantCatalog>('/api/quant/catalog/');
+    } catch (error) {
+      console.error('Error fetching quant catalog:', error);
+      return null;
+    }
+  },
+
+  async getAgentInsights(
+    ticker?: string,
+    options?: { selectedIndicators?: string[]; selectedPatterns?: string[] }
+  ): Promise<AgentsRunResult | null> {
+    try {
+      const body: {
+        ticker?: string;
+        selected_indicators?: string[];
+        selected_patterns?: string[];
+      } = {};
       if (ticker) body.ticker = ticker;
+      if (options?.selectedIndicators?.length) body.selected_indicators = options.selectedIndicators;
+      if (options?.selectedPatterns?.length) body.selected_patterns = options.selectedPatterns;
       return await djangoJson<AgentsRunResult>('/api/agents/run/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -312,12 +514,10 @@ export const apiClient = {
   /** Fetch live ticker data (indices, stocks) from /api/live-ticker/ */
   async getLiveTicker(): Promise<LiveTickerItem[]> {
     try {
-      const response = await djangoFetch('/api/live-ticker/');
-      if (!response.ok) throw new Error('Failed to fetch live ticker');
-      const data = await response.json();
+      const data = await djangoJson<{ tickers?: LiveTickerItem[]; error?: string }>('/api/live-ticker/');
+      if (data.error) return [];
       return data.tickers || [];
     } catch (error) {
-      console.error('Error fetching live ticker:', error);
       return [];
     }
   },
@@ -340,17 +540,63 @@ export const apiClient = {
     return await response.json();
   },
 
+  /** Build lightweight intraday decision for chart overlays. */
+  async getIntradayTradeDecision(symbol: string, holdMinutes = 15): Promise<IntradayTradeDecision> {
+    const params = new URLSearchParams({
+      symbol: symbol.trim(),
+      hold_minutes: String(holdMinutes),
+    });
+    const response = await djangoFetch(`/api/trade/decision/?${params.toString()}`);
+    if (!response.ok) throw new Error('Failed to fetch intraday trade decision');
+    return await response.json();
+  },
+
   async getShockScore(): Promise<ShockScorePayload> {
     return djangoJson<ShockScorePayload>('/api/shock/score/');
   },
 
-  async getShockHistory(page = 1, cause?: string): Promise<{
+  async getShockUniverse(group = 'all'): Promise<{
+    symbols: string[];
+    large_cap: string[];
+    mid_cap: string[];
+    small_cap: string[];
+    indices: Array<{ symbol: string; yf: string; type: string }>;
+    source: string;
+    count: number;
+  }> {
+    const params = new URLSearchParams({ group });
+    return djangoJson(`/api/shock/universe/?${params}`);
+  },
+
+  async getShockLiveScan(threshold = 100, index = 'nifty'): Promise<{
+    index: string;
+    net_move_pts: number;
+    threshold_pts: number;
+    direction: string;
+    shock_alert: boolean;
+    open: number;
+    close: number;
+  }> {
+    const params = new URLSearchParams({
+      threshold: String(threshold),
+      index,
+    });
+    return djangoJson(`/api/shock/live-scan/?${params}`);
+  },
+
+  async getShockHistory(
+    page = 1,
+    opts?: { cause?: string; direction?: string; index?: string; threshold?: number }
+  ): Promise<{
     results: ShockHistoryRow[];
     total: number;
     pages: number;
   }> {
     const params = new URLSearchParams({ page: String(page) });
-    if (cause) params.set('cause', cause);
+    if (opts?.cause) params.set('cause', opts.cause);
+    if (opts?.direction) params.set('direction', opts.direction);
+    if (opts?.index) params.set('index', opts.index);
+    if (opts?.threshold != null) params.set('threshold', String(opts.threshold));
     return djangoJson(`/api/shock/history/?${params}`);
   },
 
@@ -369,20 +615,63 @@ export const apiClient = {
     return djangoJson('/api/shock/alerts/');
   },
 
-  /** Run backtest (Kite NSE prices when connected, else Django/yfinance). */
-  async runBacktest(
-    ticker: string,
-    useAlphaSentiment = true,
-    kiteCredentials?: { apiKey?: string; apiSecret?: string; accessToken?: string }
-  ): Promise<BacktestResult> {
+  async suggestBacktestStrategy(prefix: string): Promise<string[]> {
+    const params = new URLSearchParams({ q: prefix });
+    const response = await fetch(`/api/backtest/suggest?${params}`, { cache: 'no-store' });
+    const data = await response.json();
+    return data.suggestions || [];
+  },
+
+  async compileBacktestStrategy(
+    strategyPrompt: string,
+    mode = 'equity_delivery'
+  ): Promise<CompiledStrategy> {
+    const response = await fetch('/api/backtest/compile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ strategy_prompt: strategyPrompt, mode }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new ApiError(data.error || 'Compile failed', response.status, data);
+    return data;
+  },
+
+  /** Strategy templates + options chain availability. */
+  async getBacktestTemplates(ticker: string): Promise<{
+    templates: BacktestStrategyTemplate[];
+    options_chain: BacktestResult['options_chain'];
+    catalog?: QuantCatalog;
+  }> {
+    const params = new URLSearchParams({ ticker: ticker.trim().toUpperCase() });
+    const response = await fetch(`/api/backtest?${params}`, { cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok) throw new ApiError(data.error || 'Failed to load templates', response.status, data);
+    return data;
+  },
+
+  /** Run backtest (news/event mode or legacy sentiment mode). */
+  async runBacktest(ticker: string, options: BacktestRunOptions = {}): Promise<BacktestResult> {
+    const mode = options.mode ?? 'equity_delivery';
     const response = await fetch('/api/backtest', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ticker: ticker.trim().toUpperCase(),
-        useAlphaSentiment,
-        apiKey: kiteCredentials?.apiKey,
-        accessToken: kiteCredentials?.accessToken,
+        mode: mode === 'legacy' ? '' : mode,
+        strategyId: options.strategyId,
+        strategyPrompt: options.strategyPrompt,
+        onlyNewsEvents: options.onlyNewsEvents,
+        days: options.days ?? 126,
+        startDate: options.startDate,
+        endDate: options.endDate,
+        periodLabel: options.periodLabel,
+        customOnly: options.customOnly,
+        useGroqCompile: options.useGroqCompile,
+        compiledRules: options.compiledRules,
+        useAlphaSentiment: options.useAlphaSentiment,
+        useKite: options.useKite,
+        apiKey: options.kiteCredentials?.apiKey,
+        accessToken: options.kiteCredentials?.accessToken,
       }),
       cache: 'no-store',
     });
