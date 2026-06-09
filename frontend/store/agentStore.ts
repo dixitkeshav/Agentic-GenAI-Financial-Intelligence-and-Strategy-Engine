@@ -7,7 +7,7 @@ export interface AgentInsight {
   confidence: number;
   explanation: string;
   timestamp: Date;
-  metrics?: Record<string, number>;
+  metrics?: Record<string, number | null>;
 }
 
 interface AgentState {
