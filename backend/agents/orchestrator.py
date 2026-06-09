@@ -12,6 +12,12 @@ from .technical_agent import TechnicalAgent
 from .market_reaction import MarketReactionAgent
 from .risk_agent import RiskAgent
 from .decision_agent import DecisionAgent
+from .debate_agents import (
+    BearResearcherAgent,
+    BullResearcherAgent,
+    DebateFacilitatorAgent,
+    RiskCommitteeAgent,
+)
 
 try:
     from shock_predictor.agent import ShockAgent, build_shock_context_from_pipeline
@@ -22,12 +28,16 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 PIPELINE_STEPS = [
-    ("news_fetch", "News ingestion", "Fetch headlines from Alpha Vantage / Finnhub / database"),
+    ("news_fetch", "News ingestion", "Fetch headlines from NewsAPI / TrueData / fallback providers"),
     ("news_scout", "News Scout", "Scan sentiment distribution and detect spikes"),
     ("macro_context", "Macro Context", "Link headlines to rates, CPI, GDP, yields"),
     ("technical", "Technical Analysis", "Moving averages, momentum, volatility"),
     ("market_reaction", "Market Reaction", "Historical reaction patterns to similar sentiment"),
     ("risk", "Risk", "Flag concentration, spike, and downside risks"),
+    ("bull_research", "Bull Research", "Build bullish thesis from multi-signal evidence"),
+    ("bear_research", "Bear Research", "Build bearish thesis from multi-signal evidence"),
+    ("risk_committee", "Risk Committee", "Set position/risk constraints from committee view"),
+    ("debate_facilitator", "Debate Facilitator", "Resolve bull vs bear and select base stance"),
     ("shock", "Shock Predictor", "Real-time Nifty shock probability and hedge hints"),
     ("decision", "Decision", "Synthesize all agent views into a recommendation"),
 ]
@@ -51,6 +61,10 @@ class AgentOrchestrator:
         self.market_reaction = self.agents[3]
         self.risk = self.agents[4]
         self.decision = self.agents[5]
+        self.bull = BullResearcherAgent()
+        self.bear = BearResearcherAgent()
+        self.risk_committee = RiskCommitteeAgent()
+        self.debate = DebateFacilitatorAgent()
         self.shock = ShockAgent() if ShockAgent else None
 
     def run(
@@ -59,6 +73,9 @@ class AgentOrchestrator:
         ticker: str = "",
         aggregate_sentiment: str = "neutral",
         news_meta: dict[str, Any] | None = None,
+        truedata_context: dict[str, Any] | None = None,
+        selected_indicators: list[str] | None = None,
+        selected_patterns: list[str] | None = None,
     ) -> dict[str, Any]:
         """
         Execute pipeline: News Scout -> Macro -> Technical -> Market Reaction -> Risk -> Decision.
@@ -85,7 +102,14 @@ class AgentOrchestrator:
             float(meta.get("fetch_ms", 0)),
         )
 
-        ctx: dict[str, Any] = {"articles": articles, "ticker": ticker, "aggregate_sentiment": aggregate_sentiment}
+        ctx: dict[str, Any] = {
+            "articles": articles,
+            "ticker": ticker,
+            "aggregate_sentiment": aggregate_sentiment,
+            "truedata_context": truedata_context or {},
+            "selected_indicators": selected_indicators or [],
+            "selected_patterns": selected_patterns or [],
+        }
 
         t0 = time.perf_counter()
         scout_out = self.news_scout.run(ctx)
@@ -115,6 +139,38 @@ class AgentOrchestrator:
         record("risk", "Risk", "completed", risk_out.get("summary", ""), (time.perf_counter() - t0) * 1000)
         ctx["agent_outputs"]["Risk"] = risk_out
 
+        t0 = time.perf_counter()
+        bull_out = self.bull.run(ctx)
+        record("bull_research", "Bull Research", "completed", bull_out.get("summary", ""), (time.perf_counter() - t0) * 1000)
+        ctx["agent_outputs"]["BullResearcher"] = bull_out
+
+        t0 = time.perf_counter()
+        bear_out = self.bear.run(ctx)
+        record("bear_research", "Bear Research", "completed", bear_out.get("summary", ""), (time.perf_counter() - t0) * 1000)
+        ctx["agent_outputs"]["BearResearcher"] = bear_out
+
+        t0 = time.perf_counter()
+        committee_out = self.risk_committee.run(ctx)
+        record(
+            "risk_committee",
+            "Risk Committee",
+            "completed",
+            committee_out.get("summary", ""),
+            (time.perf_counter() - t0) * 1000,
+        )
+        ctx["agent_outputs"]["RiskCommittee"] = committee_out
+
+        t0 = time.perf_counter()
+        debate_out = self.debate.run(ctx)
+        record(
+            "debate_facilitator",
+            "Debate Facilitator",
+            "completed",
+            debate_out.get("summary", ""),
+            (time.perf_counter() - t0) * 1000,
+        )
+        ctx["agent_outputs"]["Debate"] = debate_out
+
         shock_out = {}
         if self.shock and build_shock_context_from_pipeline:
             t0 = time.perf_counter()
@@ -141,11 +197,19 @@ class AgentOrchestrator:
             "technical": technical_out,
             "market_reaction": reaction_out,
             "risk": risk_out,
+            "bull_research": bull_out,
+            "bear_research": bear_out,
+            "risk_committee": committee_out,
+            "debate": debate_out,
             "shock": shock_out,
             "decision": decision_out,
             "recommendation": decision_out.get("recommendation", ""),
             "pipeline": pipeline,
             "article_count": len(articles),
             "news_source": meta.get("source"),
+            "news_sources": meta.get("sources"),
             "ticker": ticker or None,
+            "truedata_context": truedata_context or {},
+            "selected_indicators": selected_indicators or [],
+            "selected_patterns": selected_patterns or [],
         }
