@@ -10,20 +10,22 @@ logger = logging.getLogger(__name__)
 
 
 def _normalize_ticker(ticker: str) -> str:
-    t = (ticker or "").strip().upper()
+    t = (ticker or "").strip().upper().replace("$", "")
     if not t:
         return ""
-    if t in ("NIFTY", "NSEI", "^NSEI"):
-        return "^NSEI"
+    if t in ("NIFTY", "NIFTY50", "NSEI", "^NSEI"):
+        return "NIFTY"
     if t in ("SENSEX", "BSESN", "^BSESN"):
-        return "^BSESN"
-    if "." not in t and len(t) <= 12:
-        return f"{t}.NS"
+        return "SENSEX"
+    if t in ("BANKNIFTY", "BANK NIFTY", "^NSEBANK"):
+        return "BANKNIFTY"
+    if "." not in t and not t.startswith("^") and len(t) <= 12:
+        return t
     return t
 
 
 class TechnicalAgent(BaseAgent):
-    """Integrates technical indicators (MA crossover, recent return, volatility)."""
+    """Integrates extended technical indicators and candlestick hints."""
 
     def __init__(self):
         super().__init__(name="Technical", role="Technical analysis: trends, MAs, momentum")
@@ -32,52 +34,46 @@ class TechnicalAgent(BaseAgent):
         ticker = _normalize_ticker(context.get("ticker", ""))
         if not ticker:
             return {
-                "summary": "No ticker provided — technical analysis skipped. Pass ?ticker=RELIANCE or RELIANCE.NS.",
+                "summary": "No ticker provided — technical analysis skipped. Pass ?ticker=RELIANCE or NIFTY.",
                 "indicators": {},
                 "signal": "neutral",
             }
 
-        try:
-            import yfinance as yf
+        selected = context.get("selected_indicators") or []
+        if isinstance(selected, str):
+            selected = [s.strip() for s in selected.split(",") if s.strip()]
 
-            hist = yf.Ticker(ticker).history(period="6mo")
-            if hist is None or hist.empty or len(hist) < 20:
+        try:
+            from quant.technical_snapshot import build_technical_snapshot
+
+            snap = build_technical_snapshot(
+                ticker,
+                selected_indicators=selected if selected else None,
+            )
+            if snap.get("error"):
                 return {
-                    "summary": f"Insufficient price history for {ticker}.",
+                    "summary": snap["error"],
                     "indicators": {},
                     "signal": "neutral",
                 }
 
-            close = hist["Close"]
-            sma20 = float(close.rolling(20).mean().iloc[-1])
-            sma50 = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else sma20
-            last = float(close.iloc[-1])
-            ret_21d = float((close.iloc[-1] / close.iloc[-22] - 1) if len(close) >= 22 else 0)
-            vol = float(close.pct_change().dropna().std() * (252 ** 0.5))
+            trend = snap.get("trend", "neutral")
+            signal = trend if trend in ("bullish", "bearish") else "neutral"
+            indicators = snap.get("indicators") or {}
+            patterns = snap.get("candlestick_patterns") or []
 
-            if last > sma20 > sma50:
-                signal = "bullish"
-                trend = "Price above 20- and 50-day averages — uptrend structure."
-            elif last < sma20 < sma50:
-                signal = "bearish"
-                trend = "Price below 20- and 50-day averages — downtrend structure."
-            else:
-                signal = "neutral"
-                trend = "Mixed moving-average alignment — no clear trend."
+            summary = snap.get("summary", "")
+            if patterns:
+                summary += f" · {len(patterns)} pattern(s) on last bars"
 
-            summary = (
-                f"{ticker}: last {last:.2f}, 20d SMA {sma20:.2f}, 50d SMA {sma50:.2f}. "
-                f"~1m return {ret_21d*100:.1f}%. {trend}"
-            )
-            indicators = {
-                "last_close": round(last, 2),
-                "sma_20": round(sma20, 2),
-                "sma_50": round(sma50, 2),
-                "return_21d_pct": round(ret_21d * 100, 2),
-                "annualized_vol_pct": round(vol * 100, 2),
-            }
             self._remember({"ticker": ticker, "signal": signal, **indicators})
-            return {"summary": summary, "indicators": indicators, "signal": signal}
+            return {
+                "summary": summary,
+                "indicators": indicators,
+                "signal": signal,
+                "candlestick_patterns": patterns,
+                "price_action": snap.get("price_action"),
+            }
         except Exception as e:
             logger.warning("Technical agent failed for %s: %s", ticker, e)
             return {
