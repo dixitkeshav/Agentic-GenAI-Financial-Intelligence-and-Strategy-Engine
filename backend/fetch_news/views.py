@@ -9,14 +9,50 @@ import math
 import requests
 import json
 import os
+from datetime import datetime, timezone
+from typing import Any
 from .models import NewsArticle
 from .sentiment import analyze_financial_sentiment
 from . import finnhub_client as fh
+from . import newsapi_client as na
+from . import truedata_bridge as td
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 logger = logging.getLogger(__name__)
 ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "YOUR_API_KEY_HERE")
+
+
+def _looks_like_corporate_notice(title: str) -> bool:
+    t = (title or "").strip().lower()
+    if not t:
+        return False
+    corporate_markers = (
+        "consolidated",
+        "standalone",
+        "board meeting",
+        "record date",
+        "agm",
+        "egm",
+        "notlisted",
+        "outcome of board meeting",
+        "shareholding pattern",
+    )
+    return any(marker in t for marker in corporate_markers)
+
+
+def _dedupe_articles(items):
+    seen = set()
+    out = []
+    for item in items:
+        title = (item.get("title") or "").strip().lower()
+        url = (item.get("url") or "").strip().lower()
+        key = title or url
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
 
 # Home/Dashboard View
 def dashboard(request):
@@ -27,9 +63,11 @@ def dashboard(request):
         logger.error(f"Error loading dashboard: {e}", exc_info=True)
         return JsonResponse({'error': 'Internal Server Error'}, status=500)
 
-# News API from Alpha Vantage (with optional cache)
+# News API endpoint (NewsAPI primary; fallback providers)
 def fetch_news(request):
-    cache_key = "fetch_news_financial_markets"
+    providers_q = (request.GET.get("providers") or "").strip().lower()
+    requested = {p.strip() for p in providers_q.split(",") if p.strip()} if providers_q else set()
+    cache_key = f"fetch_news_financial_markets:{','.join(sorted(requested)) or 'default'}"
     try:
         cached = cache.get(cache_key)
         if cached is not None:
@@ -37,90 +75,124 @@ def fetch_news(request):
     except Exception:
         pass
 
-    url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics=financial_markets&apikey={ALPHA_VANTAGE_API_KEY}&limit=30"
-    try:
-        response = requests.get(url, timeout=15)
-        data = response.json()
+    use_newsapi = na.is_configured() and ((not requested) or ("newsapi" in requested))
+    use_alpha = (not requested) or ("alpha_vantage" in requested) or ("alpha" in requested)
+    # TrueData only when explicitly requested — free providers are primary.
+    use_truedata = td.is_available() and ("truedata" in requested)
+    use_finnhub = fh.is_configured() and (
+        (not requested) or ("finnhub" in requested) or (("alpha_vantage" in requested) and len(requested) == 1)
+    )
 
-        feed = data.get("feed") or []
-        if not feed:
-            # Finnhub fallback when Alpha has no feed (rate limit / empty).
-            if fh.is_configured():
-                fh_items = fh.market_news("general")
-                if fh_items:
-                    articles = []
-                    for item in fh_items[:20]:
-                        lab = "neutral"
-                        try:
-                            s, _ = analyze_financial_sentiment(
-                                ((item.get("title") or "") + " " + (item.get("summary") or ""))[:1500]
-                            )
-                            lab = (s or "neutral").lower()
-                        except Exception:
-                            pass
-                        articles.append(
-                            {
-                                "title": item.get("title", "No Title"),
-                                "summary": item.get("summary", ""),
-                                "url": item.get("url", "#"),
-                                "sentiment": lab,
-                                "source": item.get("source") or "Finnhub",
-                                "time_published": item.get("time_published", ""),
-                            }
-                        )
-                    try:
-                        for a in articles:
-                            title = (a.get("title") or "").strip()
-                            summary = (a.get("summary") or "").strip()
-                            if not title:
-                                continue
-                            NewsArticle.objects.update_or_create(
-                                title=title,
-                                defaults={"content": (summary or title)[:20000]},
-                            )
-                    except Exception:
-                        logger.exception("fetch_news: Finnhub persist failed")
-                    payload = {"articles": articles, "source": "finnhub"}
-                    try:
-                        cache.set(cache_key, payload, timeout=300)
-                    except Exception:
-                        pass
-                    return JsonResponse(payload)
-            err = data.get("Note") or data.get("Error Message") or "No news found"
-            payload = {"articles": [], "error": err}
-            try:
-                cache.set(cache_key, payload, timeout=120)  # 2 minutes
-            except Exception:
-                pass
-            return JsonResponse(payload, status=200)
+    articles = []
+    sources = []
 
-        articles = [
-            {
-                "title": item.get("title", "No Title"),
-                "summary": item.get("summary", ""),
-                "url": item.get("url", "#"),
-                "sentiment": (item.get("overall_sentiment_label") or "Neutral").lower(),
-                "source": item.get("source", "Alpha Vantage"),
-                "time_published": item.get("time_published", ""),
-            }
-            for item in feed[:20]
-        ]
-
-        # Persist for sentiment charts.
-        try:
-            for a in articles:
-                title = (a.get("title") or "").strip()
-                summary = (a.get("summary") or "").strip()
-                if not title or not summary:
-                    continue
-                NewsArticle.objects.update_or_create(
-                    title=title,
-                    defaults={"content": summary[:20000]},
+    if use_newsapi:
+        api_articles = na.fetch_market_news(limit=30)
+        if api_articles:
+            for item in api_articles[:30]:
+                lab = "neutral"
+                try:
+                    s, _ = analyze_financial_sentiment(
+                        ((item.get("title") or "") + " " + (item.get("summary") or ""))[:1500]
+                    )
+                    lab = (s or "neutral").lower()
+                except Exception:
+                    pass
+                articles.append(
+                    {
+                        "title": item.get("title", "No Title"),
+                        "summary": item.get("summary", ""),
+                        "url": item.get("url", "#"),
+                        "sentiment": lab,
+                        "source": item.get("source") or "NewsAPI",
+                        "time_published": item.get("time_published", ""),
+                    }
                 )
-        except Exception:
-            logger.exception("fetch_news: failed to persist NewsArticle records")
+            sources.append("newsapi")
 
-        payload = {"articles": articles, "source": "alpha_vantage"}
+    if not articles and use_alpha:
+        url = (
+            "https://www.alphavantage.co/query"
+            f"?function=NEWS_SENTIMENT&topics=financial_markets&apikey={ALPHA_VANTAGE_API_KEY}&limit=30"
+        )
+        try:
+            response = requests.get(url, timeout=15)
+            data = response.json()
+            feed = data.get("feed") or []
+            if feed:
+                articles.extend(
+                    {
+                        "title": item.get("title", "No Title"),
+                        "summary": item.get("summary", ""),
+                        "url": item.get("url", "#"),
+                        "sentiment": (item.get("overall_sentiment_label") or "Neutral").lower(),
+                        "source": item.get("source", "Alpha Vantage"),
+                        "time_published": item.get("time_published", ""),
+                    }
+                    for item in feed[:25]
+                )
+                sources.append("alpha_vantage")
+        except Exception:
+            logger.exception("fetch_news: alpha vantage failed")
+
+    if not articles and use_finnhub:
+        fh_items = fh.market_news("general")
+        if fh_items:
+            for item in fh_items[:20]:
+                lab = "neutral"
+                try:
+                    s, _ = analyze_financial_sentiment(
+                        ((item.get("title") or "") + " " + (item.get("summary") or ""))[:1500]
+                    )
+                    lab = (s or "neutral").lower()
+                except Exception:
+                    pass
+                articles.append(
+                    {
+                        "title": item.get("title", "No Title"),
+                        "summary": item.get("summary", ""),
+                        "url": item.get("url", "#"),
+                        "sentiment": lab,
+                        "source": item.get("source") or "Finnhub",
+                        "time_published": item.get("time_published", ""),
+                    }
+                )
+            sources.append("finnhub")
+
+    if not articles and use_truedata:
+        td_articles = td.fetch_news(limit=30, include_corporate=False)
+        if td_articles:
+            filtered = [
+                a for a in td_articles
+                if not _looks_like_corporate_notice(a.get("title", ""))
+            ]
+            if filtered:
+                articles.extend(filtered)
+                sources.append("truedata")
+
+    articles = _dedupe_articles(articles)[:30]
+
+    try:
+        for a in articles:
+            title = (a.get("title") or "").strip()
+            summary = (a.get("summary") or "").strip()
+            if not title:
+                continue
+            NewsArticle.objects.update_or_create(
+                title=title,
+                defaults={"content": (summary or title)[:20000]},
+            )
+    except Exception:
+        logger.exception("fetch_news: failed to persist NewsArticle records")
+
+    try:
+        payload = {
+            "articles": articles,
+            "source": sources[0] if len(sources) == 1 else "multi",
+            "sources": sources,
+        }
+        if not articles:
+            payload["error"] = "No news found from selected providers"
         try:
             cache.set(cache_key, payload, timeout=300)  # 5 min
         except Exception:
@@ -256,6 +328,43 @@ def custom_sentiment(request):
     if not ticker:
         return Response({"error": "No ticker provided."}, status=400)
     try:
+        if na.is_configured():
+            news = na.fetch_symbol_news(ticker, limit=20)
+            if news:
+                pos = neg = neu = 0
+                for item in news:
+                    text = ((item.get("title") or "") + " " + (item.get("summary") or ""))[:1500]
+                    if not text.strip():
+                        continue
+                    try:
+                        s, _ = analyze_financial_sentiment(text)
+                        s = (s or "neutral").lower()
+                        if s == "positive":
+                            pos += 1
+                        elif s == "negative":
+                            neg += 1
+                        else:
+                            neu += 1
+                    except Exception:
+                        neu += 1
+                total = pos + neg + neu
+                if total > 0:
+                    if pos > neg and pos > neu:
+                        sentiment = "positive"
+                    elif neg > pos and neg > neu:
+                        sentiment = "negative"
+                    else:
+                        sentiment = "neutral"
+                    return Response(
+                        {
+                            "sentiment": sentiment,
+                            "count": total,
+                            "positive": pos,
+                            "negative": neg,
+                            "neutral": neu,
+                            "source": "newsapi",
+                        }
+                    )
         if fh.is_configured():
             out = fh.aggregate_sentiment_company_news(ticker, days=14)
             out["source"] = "finnhub"
@@ -264,28 +373,33 @@ def custom_sentiment(request):
         r = requests.get(url, timeout=15)
         data = r.json()
         feed = data.get("feed", [])
-        if not feed:
-            return Response({"sentiment": "neutral", "count": 0})
-        pos = neg = neu = 0
-        for item in feed:
-            lab = (item.get("overall_sentiment_label") or "Neutral").lower()
-            if lab == "positive": pos += 1
-            elif lab == "negative": neg += 1
-            else: neu += 1
-        total = pos + neg + neu
-        if pos > neg and pos > neu: sentiment = "positive"
-        elif neg > pos and neg > neu: sentiment = "negative"
-        else: sentiment = "neutral"
-        return Response(
-            {
-                "sentiment": sentiment,
-                "count": total,
-                "positive": pos,
-                "negative": neg,
-                "neutral": neu,
-                "source": "alpha_vantage",
-            }
-        )
+        if feed:
+            pos = neg = neu = 0
+            for item in feed:
+                lab = (item.get("overall_sentiment_label") or "Neutral").lower()
+                if lab == "positive": pos += 1
+                elif lab == "negative": neg += 1
+                else: neu += 1
+            total = pos + neg + neu
+            if pos > neg and pos > neu: sentiment = "positive"
+            elif neg > pos and neg > neu: sentiment = "negative"
+            else: sentiment = "neutral"
+            return Response(
+                {
+                    "sentiment": sentiment,
+                    "count": total,
+                    "positive": pos,
+                    "negative": neg,
+                    "neutral": neu,
+                    "source": "alpha_vantage",
+                }
+            )
+        if td.is_available():
+            out = td.aggregate_symbol_sentiment(ticker)
+            if out and out.get("count", 0):
+                out["source"] = "truedata"
+                return Response(out)
+        return Response({"sentiment": "neutral", "count": 0, "source": "none"})
     except Exception as e:
         return Response({"error": str(e), "sentiment": "neutral"}, status=500)
 
@@ -317,68 +431,132 @@ def agents_run(request):
 
         fetch_started = _time.perf_counter()
         news_source = "unknown"
-        if request.method == 'POST' and request.data.get("articles"):
+        news_source_counts: dict[str, int] = {}
+        articles: list[dict] = []
+        req_data = request.data if request.method == "POST" else request.GET
+        ticker = (req_data.get("ticker") or "").strip()
+        selected_indicators = req_data.get("selected_indicators") or []
+        selected_patterns = req_data.get("selected_patterns") or []
+        if isinstance(selected_indicators, str):
+            selected_indicators = [s.strip() for s in selected_indicators.split(",") if s.strip()]
+        if isinstance(selected_patterns, str):
+            selected_patterns = [s.strip() for s in selected_patterns.split(",") if s.strip()]
+
+        if request.method == "POST" and request.data.get("articles"):
             articles = request.data["articles"]
             news_source = "client"
-        else:
-            url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics=financial_markets&apikey={ALPHA_VANTAGE_API_KEY}&limit=25"
-            try:
-                r = requests.get(url, timeout=25)
-                feed = r.json().get("feed", [])
-            except Exception:
-                feed = []
+        elif ticker:
+            from fetch_news.news_aggregator import fetch_merged_news
 
-            if feed:
-                news_source = "alpha_vantage"
+            merged = fetch_merged_news(ticker, limit=40, run_finbert=True)
+            articles = [
+                {
+                    "title": i.get("title", ""),
+                    "summary": i.get("summary", ""),
+                    "sentiment": (i.get("sentiment") or "neutral").lower(),
+                    "source": i.get("source", ""),
+                    "provider": i.get("provider", ""),
+                    "url": i.get("url", "#"),
+                }
+                for i in merged.get("articles", [])
+            ]
+            news_source = merged.get("source", "merged")
+            news_source_counts = merged.get("sources") or {}
+        else:
+            from fetch_news.news_aggregator import fetch_merged_news
+
+            merged = fetch_merged_news(None, limit=30, run_finbert=True, include_market=True)
+            if merged.get("articles"):
                 articles = [
                     {
                         "title": i.get("title", ""),
                         "summary": i.get("summary", ""),
-                        "sentiment": (i.get("overall_sentiment_label") or "Neutral").lower(),
+                        "sentiment": (i.get("sentiment") or "neutral").lower(),
                     }
-                    for i in feed[:25]
+                    for i in merged["articles"]
                 ]
-            elif fh.is_configured():
-                news_source = "finnhub"
-                fh_items = fh.market_news("general")
-                articles = [
-                    {"title": x.get("title", ""), "summary": x.get("summary", ""), "sentiment": "neutral"}
-                    for x in fh_items[:25]
-                ]
+                news_source = merged.get("source", "merged")
+                news_source_counts = merged.get("sources") or {}
             else:
-                from .sentiment import analyze_financial_sentiment
-                news_source = "database_finbert"
-                stored = list(
-                    NewsArticle.objects.all()
-                    .order_by("-published_at")
-                    .values_list("title", "content")[:30]
-                )
-                articles = []
-                for title, content in stored:
-                    text = ((title or "") + " " + (content or ""))[:2000]
-                    if not text.strip():
-                        continue
+                td_articles = []
+                feed = []
+                api_articles = na.fetch_market_news(limit=25) if na.is_configured() else []
+
+                if api_articles:
+                    news_source = "newsapi"
+                    articles = [
+                        {
+                            "title": i.get("title", ""),
+                            "summary": i.get("summary", ""),
+                            "sentiment": (i.get("sentiment") or "neutral").lower(),
+                        }
+                        for i in api_articles[:25]
+                    ]
+                else:
+                    url = (
+                        f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT"
+                        f"&topics=financial_markets&apikey={ALPHA_VANTAGE_API_KEY}&limit=25"
+                    )
                     try:
-                        s, _ = analyze_financial_sentiment(text)
-                        articles.append(
-                            {
-                                "title": title or "",
-                                "summary": content or "",
-                                "sentiment": (s or "neutral").lower(),
-                            }
-                        )
+                        r = requests.get(url, timeout=25)
+                        feed = r.json().get("feed", [])
                     except Exception:
-                        articles.append(
+                        feed = []
+
+                    if feed:
+                        news_source = "alpha_vantage"
+                        articles = [
                             {
-                                "title": title or "",
-                                "summary": content or "",
-                                "sentiment": "neutral",
+                                "title": i.get("title", ""),
+                                "summary": i.get("summary", ""),
+                                "sentiment": (i.get("overall_sentiment_label") or "Neutral").lower(),
                             }
-                        )
+                            for i in feed[:25]
+                        ]
+                    elif fh.is_configured():
+                        news_source = "finnhub"
+                        fh_items = fh.market_news("general")
+                        articles = [
+                            {"title": x.get("title", ""), "summary": x.get("summary", ""), "sentiment": "neutral"}
+                            for x in fh_items[:25]
+                        ]
+
+                if not articles:
+                    from .sentiment import analyze_financial_sentiment
+
+                    news_source = "database_finbert"
+                    stored = list(
+                        NewsArticle.objects.all()
+                        .order_by("-published_at")
+                        .values_list("title", "content")[:30]
+                    )
+                    articles = []
+                    for title, content in stored:
+                        text = ((title or "") + " " + (content or ""))[:2000]
+                        if not text.strip():
+                            continue
+                        try:
+                            s, _ = analyze_financial_sentiment(text)
+                            articles.append(
+                                {
+                                    "title": title or "",
+                                    "summary": content or "",
+                                    "sentiment": (s or "neutral").lower(),
+                                }
+                            )
+                        except Exception:
+                            articles.append(
+                                {
+                                    "title": title or "",
+                                    "summary": content or "",
+                                    "sentiment": "neutral",
+                                }
+                            )
 
         fetch_ms = (_time.perf_counter() - fetch_started) * 1000
-        req_data = request.data if request.method == "POST" else request.GET
-        ticker = (req_data.get("ticker") or "").strip()
+        td_context = {}
+        if ticker and td.is_available():
+            td_context = _truedata_decision_context_for_symbol(symbol=ticker)
         agg = "neutral"
         if articles:
             p = sum(1 for a in articles if (a.get("sentiment") or "").lower() == "positive")
@@ -391,7 +569,14 @@ def agents_run(request):
             articles,
             ticker=ticker,
             aggregate_sentiment=agg,
-            news_meta={"source": news_source, "fetch_ms": fetch_ms},
+            news_meta={
+                "source": news_source,
+                "fetch_ms": fetch_ms,
+                "sources": news_source_counts,
+            },
+            truedata_context=td_context,
+            selected_indicators=selected_indicators,
+            selected_patterns=selected_patterns,
         )
         return Response(result)
     except Exception as e:
@@ -399,7 +584,15 @@ def agents_run(request):
         return Response({"error": str(e)}, status=500)
 
 
-# ——— Quant: signals and backtest ———
+# ——— Quant: catalog, signals and backtest ———
+@api_view(["GET"])
+def quant_catalog(request):
+    """Indicators, candlestick patterns, and strategy templates for UI dropdowns."""
+    from quant.catalog import get_full_catalog
+
+    return Response(get_full_catalog())
+
+
 @api_view(['POST'])
 def quant_signals(request):
     """Return sentiment momentum, MA crossover, mean-reversion signal from provided sentiment series or last probs."""
@@ -417,12 +610,179 @@ def quant_signals(request):
         return Response({"error": str(e)}, status=500)
 
 
+@api_view(["POST"])
+def quant_backtest_compile(request):
+    """Compile natural-language strategy to structured rules via Groq."""
+    prompt = (request.data.get("strategy_prompt") or request.data.get("prompt") or "").strip()
+    mode_hint = request.data.get("mode") or "equity_delivery"
+    if not prompt:
+        return Response({"error": "strategy_prompt required"}, status=400)
+    try:
+        from quant.strategy_engine import parse_strategy_prompt
+        from quant.strategy_llm import compile_strategy
+
+        groq_out = compile_strategy(prompt, mode_hint=mode_hint)
+        rules = groq_out.get("rules") or []
+        if not rules:
+            rules = parse_strategy_prompt(prompt)
+            groq_out["rules"] = rules
+            groq_out["fixes_applied"] = list(groq_out.get("fixes_applied") or []) + [
+                "Applied built-in parser for indicators"
+            ]
+        return Response(groq_out)
+    except Exception as e:
+        logger.exception("quant_backtest_compile: %s", e)
+        return Response({"error": str(e)}, status=500)
+
+
+@api_view(["GET", "POST"])
+def quant_research_benchmark(request):
+    """
+    Research benchmark API with transaction costs/slippage and Indian symbols.
+
+    Body/query params:
+      - symbols: "RELIANCE.NS,^NSEI,INFY.NS" (optional)
+      - include_global: true|false
+      - days: 252 (90..756)
+      - transaction_cost_bps: 8
+      - slippage_bps: 4
+      - include_agentic: true|false
+    """
+    qp = request.GET if request.method == "GET" else request.data
+    symbols_raw = qp.get("symbols") or qp.get("universe") or ""
+    if isinstance(symbols_raw, str):
+        symbols = [x.strip().upper() for x in symbols_raw.split(",") if x.strip()]
+    else:
+        symbols = [str(x).strip().upper() for x in (symbols_raw or []) if str(x).strip()]
+
+    def _as_bool(v: Any, default: bool = False) -> bool:
+        if v is None:
+            return default
+        return str(v).strip().lower() in ("1", "true", "yes", "y")
+
+    try:
+        days = int(qp.get("days", 252))
+    except (TypeError, ValueError):
+        days = 252
+    try:
+        tc_bps = float(qp.get("transaction_cost_bps", 8))
+    except (TypeError, ValueError):
+        tc_bps = 8.0
+    try:
+        slippage_bps = float(qp.get("slippage_bps", 4))
+    except (TypeError, ValueError):
+        slippage_bps = 4.0
+
+    include_global = _as_bool(qp.get("include_global"), default=False)
+    include_agentic = _as_bool(qp.get("include_agentic"), default=True)
+
+    try:
+        from quant.research_benchmark import run_research_benchmark
+
+        out = run_research_benchmark(
+            symbols=symbols or None,
+            include_global=include_global,
+            days=days,
+            transaction_cost_bps=tc_bps,
+            slippage_bps=slippage_bps,
+            include_agentic=include_agentic,
+        )
+        return Response(out)
+    except Exception as e:
+        logger.exception("quant_research_benchmark: %s", e)
+        return Response({"error": str(e)}, status=500)
+
+
 @api_view(['GET', 'POST'])
 def quant_backtest(request):
-    """Run backtest: price-only vs sentiment strategy. GET: ticker=AAPL. POST: ticker, optional sentiment_series."""
+    """
+    Backtest API.
+    GET ?templates=1 → list strategy templates.
+    POST/GET with mode=equity_intraday|equity_delivery|options → event/news backtest with trade log.
+    Legacy: omit mode → buy-and-hold vs sentiment (run_backtest).
+    """
     qp = request.GET if request.method == "GET" else request.data
-    ticker = qp.get("ticker", "AAPL")
+
+    if str(qp.get("catalog", "")).lower() in ("1", "true", "yes"):
+        from quant.catalog import get_full_catalog
+
+        return Response(get_full_catalog())
+
+    if str(qp.get("templates", "")).lower() in ("1", "true", "yes"):
+        from quant.strategy_engine import list_templates
+        from quant.event_backtest import check_options_chain_available
+        from quant.catalog import get_full_catalog
+
+        ticker = qp.get("ticker", "RELIANCE")
+        return Response(
+            {
+                "templates": list_templates(),
+                "options_chain": check_options_chain_available(ticker),
+                "catalog": get_full_catalog(),
+            }
+        )
+
+    if str(qp.get("suggest", "")).lower() in ("1", "true", "yes"):
+        from quant.strategy_llm import groq_suggest_next_words, suggest_phrases
+
+        prefix = qp.get("q") or qp.get("prefix") or ""
+        use_groq = str(qp.get("groq", "true")).lower() not in ("false", "0", "no")
+        suggestions = groq_suggest_next_words(prefix) if use_groq and len(prefix) >= 2 else suggest_phrases(prefix)
+        return Response({"suggestions": suggestions, "prefix": prefix})
+
+    mode = (qp.get("mode") or "").strip().lower()
+    ticker = qp.get("ticker", "RELIANCE")
+
+    if mode in ("equity_intraday", "equity_delivery", "options", "intraday", "delivery"):
+        if mode == "intraday":
+            mode = "equity_intraday"
+        if mode == "delivery":
+            mode = "equity_delivery"
+        try:
+            days = int(qp.get("days", 126))
+        except (TypeError, ValueError):
+            days = 126
+        days = max(30, min(days, 252))
+        only_news = str(qp.get("only_news_events", "true")).lower() not in ("false", "0", "no")
+        try:
+            from quant.event_backtest import run_event_backtest
+
+            price_history = None
+            price_source = qp.get("price_source")
+            if request.method == "POST" and request.data.get("price_history"):
+                price_history = request.data["price_history"]
+            custom_only = str(qp.get("custom_only", "false")).lower() in ("true", "1", "yes")
+            use_groq = str(qp.get("use_groq_compile", "false")).lower() in ("true", "1", "yes")
+            compiled_rules = None
+            if request.method == "POST" and request.data.get("compiled_rules"):
+                compiled_rules = request.data["compiled_rules"]
+            result = run_event_backtest(
+                ticker=ticker,
+                mode=mode,
+                template_id=qp.get("strategy_id") or qp.get("template_id"),
+                strategy_prompt=qp.get("strategy_prompt"),
+                only_news_events=only_news,
+                days=days,
+                start_date=qp.get("start_date") or None,
+                end_date=qp.get("end_date") or None,
+                period_label=qp.get("period_label") or None,
+                price_history=price_history,
+                price_source=price_source,
+                custom_only=custom_only,
+                compiled_rules=compiled_rules,
+                use_groq_compile=use_groq,
+            )
+            return Response(result)
+        except Exception as e:
+            logger.exception("quant_backtest event: %s", e)
+            return Response({"error": str(e)}, status=500)
+
     use_alpha = str(qp.get("use_alpha_sentiment", "true")).lower() not in ("false", "0", "no")
+    try:
+        days = int(qp.get("days", 126))
+    except (TypeError, ValueError):
+        days = 126
+    days = max(30, min(days, 252))
     sentiment_series = None
     if request.method == "POST" and request.data.get("sentiment_series"):
         import pandas as pd
@@ -436,7 +796,7 @@ def quant_backtest(request):
         result = run_backtest(
             ticker=ticker,
             sentiment_series=sentiment_series,
-            days=252,
+            days=days,
             alpha_vantage_key=ALPHA_VANTAGE_API_KEY,
             use_alpha_sentiment=use_alpha,
             price_history=price_history,
@@ -488,6 +848,7 @@ def symbol_deep_dive(request):
         result = agent.run({
             "symbol": symbol,
             "alpha_vantage_api_key": ALPHA_VANTAGE_API_KEY,
+            "newsapi_api_key": os.getenv("NEWSAPI_KEY", ""),
         })
         if result.get("error") and not result.get("prediction"):
             return Response(result, status=500)
@@ -645,7 +1006,40 @@ def scanner(request):
         symbols = symbols[:25]
     period = request.GET.get("period", "3mo")
 
-    def _alpha_sentiment_for_ticker(ticker: str) -> dict:
+    def _news_sentiment_for_ticker(ticker: str) -> dict:
+        if na.is_configured():
+            items = na.fetch_symbol_news(ticker, limit=15)
+            if items:
+                pos = neg = neu = 0
+                for item in items:
+                    text = ((item.get("title") or "") + " " + (item.get("summary") or ""))[:1500]
+                    if not text.strip():
+                        continue
+                    try:
+                        s, _ = analyze_financial_sentiment(text)
+                        s = (s or "neutral").lower()
+                        if s == "positive":
+                            pos += 1
+                        elif s == "negative":
+                            neg += 1
+                        else:
+                            neu += 1
+                    except Exception:
+                        neu += 1
+                count = pos + neg + neu
+                if count > 0:
+                    sentiment = "neutral"
+                    if pos > neg and pos > neu:
+                        sentiment = "positive"
+                    elif neg > pos and neg > neu:
+                        sentiment = "negative"
+                    return {
+                        "sentiment": sentiment,
+                        "count": count,
+                        "positive": pos,
+                        "negative": neg,
+                        "neutral": neu,
+                    }
         try:
             url = (
                 "https://www.alphavantage.co/query"
@@ -706,10 +1100,9 @@ def scanner(request):
 
     results = []
     for sym in symbols:
-        if use_fh:
+        sent = _news_sentiment_for_ticker(sym)
+        if use_fh and sent.get("count", 0) == 0:
             sent = fh.aggregate_sentiment_company_news(sym, days=14)
-        else:
-            sent = _alpha_sentiment_for_ticker(sym)
         if use_fh:
             mom = fh.momentum_from_candles(sym, period)
             if mom.get("error"):
@@ -757,7 +1150,8 @@ def scanner(request):
             }
         )
 
-    return Response({"period": period, "results": results, "source": "finnhub" if use_fh else "alpha_vantage_yfinance"})
+    source = "finnhub_yfinance" if use_fh else "newsapi_alpha_yfinance"
+    return Response({"period": period, "results": results, "source": source})
 
 
 def _sanitize_opt_num(val):
@@ -851,12 +1245,12 @@ def _options_chain_yfinance(symbol: str, expiry: str) -> dict:
     }
 
 
-# ——— Options chain (yfinance first, Finnhub fallback for US) ———
+# ——— Options chain (yfinance / Finnhub primary; TrueData optional) ———
 @api_view(["GET"])
 def options_chain(request):
     """
-    Options chain: try Yahoo Finance first (reliable for US names), then Finnhub for US if needed.
-    NSE/BSE chains are often unavailable from both; use liquid US symbols (e.g. AAPL) to verify.
+    Options chain: Yahoo Finance and Finnhub for global symbols;
+    TrueData only when TRUEDATA_ENABLED=true.
     """
     symbol = (request.GET.get("symbol") or "").strip().upper()
     if not symbol:
@@ -889,6 +1283,23 @@ def options_chain(request):
                 cache.set(cache_key, payload, timeout=120)
                 return Response(payload)
 
+        if td.is_available():
+            td_payload = td.get_symbol_option_chain(symbol=symbol, expiry=expiry or None)
+            td_rows = td_payload.get("data") or td_payload.get("rows") or []
+            td_expiries = td_payload.get("expiries") or []
+            if td_rows or td_expiries:
+                payload = {
+                    "symbol": td_payload.get("symbol") or symbol,
+                    "symbol_requested": td_payload.get("symbol_requested") or symbol,
+                    "expiry": td_payload.get("expiry"),
+                    "expiries": td_expiries,
+                    "data": td_rows,
+                    "source": "truedata",
+                    "error": td_payload.get("error") if not td_rows else None,
+                }
+                cache.set(cache_key, payload, timeout=60)
+                return Response(payload)
+
         err_msg = payload.get("error") or "No chain data"
         payload = {
             "symbol": symbol,
@@ -910,3 +1321,232 @@ def options_chain(request):
         }
         cache.set(cache_key, payload, timeout=30)
         return Response(payload)
+
+
+def _safe_float(val, default=0.0):
+    try:
+        out = float(val)
+        if not math.isfinite(out):
+            return default
+        return out
+    except (TypeError, ValueError):
+        return default
+
+
+def _truedata_decision_context_for_symbol(symbol: str, expiry: str | None = None) -> dict:
+    """
+    Best-effort TrueData market + greeks + corporate snapshot for signal enrichment.
+    """
+    if not td.is_available():
+        return {}
+    unavailable = []
+    ctx: dict[str, Any] = {"symbol": symbol, "expiry": expiry, "source": "truedata"}
+    try:
+        ltp = td.call_api("getLTP", symbol=symbol)
+        if isinstance(ltp, dict) and ltp.get("error"):
+            unavailable.append("getLTP")
+        ctx["ltp"] = ltp
+
+        option_chain = td.call_api("getOptionChainLive", symbol=symbol, expiry=expiry)
+        if isinstance(option_chain, dict) and option_chain.get("error"):
+            option_chain = td.call_api("getSymbolOptionChain", symbol=symbol, expiry=expiry)
+        if isinstance(option_chain, dict) and option_chain.get("error"):
+            unavailable.append("getOptionChainLive/getSymbolOptionChain")
+        ctx["option_chain_live"] = option_chain
+
+        greeks = td.call_api("getOptionChainwithGreeks", symbol=symbol, expiry=expiry)
+        if isinstance(greeks, dict) and greeks.get("error"):
+            unavailable.append("getOptionChainwithGreeks")
+        ctx["option_chain_greeks"] = greeks
+
+        oi_gainers = td.call_api("getOIGainers", symbol=symbol)
+        if isinstance(oi_gainers, dict) and oi_gainers.get("error"):
+            unavailable.append("getOIGainers")
+        ctx["oi_gainers"] = oi_gainers
+
+        oi_losers = td.call_api("getOILosers", symbol=symbol)
+        if isinstance(oi_losers, dict) and oi_losers.get("error"):
+            unavailable.append("getOILosers")
+        ctx["oi_losers"] = oi_losers
+
+        corp_actions = td.call_api("getCorpAction", symbol=symbol)
+        if isinstance(corp_actions, dict) and corp_actions.get("error"):
+            unavailable.append("getCorpAction")
+        ctx["corporate_actions"] = corp_actions
+    except Exception:
+        return {}
+
+    def _rows(obj):
+        if isinstance(obj, list):
+            return obj
+        if isinstance(obj, dict):
+            for key in ("data", "rows", "items", "result", "results"):
+                if isinstance(obj.get(key), list):
+                    return obj[key]
+        return []
+
+    oi_gain_rows = _rows(ctx.get("oi_gainers"))
+    oi_loss_rows = _rows(ctx.get("oi_losers"))
+    chain_rows = _rows(ctx.get("option_chain_live"))
+    greeks_rows = _rows(ctx.get("option_chain_greeks"))
+    corporate_action_rows = _rows(ctx.get("corporate_actions"))
+    ctx["decision_factors"] = {
+        "oi_gainers_count": len(oi_gain_rows),
+        "oi_losers_count": len(oi_loss_rows),
+        "chain_depth": len(chain_rows),
+        "greeks_depth": len(greeks_rows),
+        "corporate_actions_count": len(corporate_action_rows),
+    }
+    ctx["unavailable_apis"] = sorted(set(unavailable))
+    return ctx
+
+
+def _intraday_decision_from_history(
+    symbol: str,
+    rows: list[dict],
+    hold_minutes: int,
+    truedata_context: dict | None = None,
+) -> dict:
+    if len(rows) < 20:
+        return {
+            "symbol": symbol,
+            "decision": "NO_TRADE",
+            "reason": "Not enough recent candles to build signal.",
+            "confidence": 0.0,
+            "hold_minutes": hold_minutes,
+            "entry_price": None,
+            "stop_loss": None,
+            "target_price": None,
+            "expected_move_pct": 0.0,
+            "expected_profit_pct": 0.0,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    closes = [_safe_float(r.get("close")) for r in rows if r.get("close") is not None]
+    highs = [_safe_float(r.get("high")) for r in rows if r.get("high") is not None]
+    lows = [_safe_float(r.get("low")) for r in rows if r.get("low") is not None]
+    if len(closes) < 20 or len(highs) < 20 or len(lows) < 20:
+        return {
+            "symbol": symbol,
+            "decision": "NO_TRADE",
+            "reason": "Invalid candle values for decision model.",
+            "confidence": 0.0,
+            "hold_minutes": hold_minutes,
+            "entry_price": None,
+            "stop_loss": None,
+            "target_price": None,
+            "expected_move_pct": 0.0,
+            "expected_profit_pct": 0.0,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    close = closes[-1]
+    prev_close = closes[-2]
+    momentum_5 = ((close / closes[-6]) - 1.0) * 100.0 if len(closes) >= 6 and closes[-6] else 0.0
+    sma_9 = sum(closes[-9:]) / 9.0
+    sma_20 = sum(closes[-20:]) / 20.0
+    trend_score = ((sma_9 - sma_20) / sma_20 * 100.0) if sma_20 else 0.0
+
+    tr_samples = []
+    for i in range(max(1, len(rows) - 14), len(rows)):
+        c_prev = _safe_float(rows[i - 1].get("close"), _safe_float(rows[i].get("close")))
+        hi = _safe_float(rows[i].get("high"))
+        lo = _safe_float(rows[i].get("low"))
+        tr = max(hi - lo, abs(hi - c_prev), abs(lo - c_prev))
+        tr_samples.append(tr)
+    atr = (sum(tr_samples) / len(tr_samples)) if tr_samples else max(abs(close - prev_close), 0.0)
+    atr = max(atr, close * 0.001) if close else atr
+
+    directional_score = (0.65 * trend_score) + (0.35 * momentum_5)
+    td_bias = 0.0
+    td_note = ""
+    if truedata_context:
+        factors = truedata_context.get("decision_factors") or {}
+        oi_gainers = int(factors.get("oi_gainers_count", 0) or 0)
+        oi_losers = int(factors.get("oi_losers_count", 0) or 0)
+        chain_depth = int(factors.get("chain_depth", 0) or 0)
+        greeks_depth = int(factors.get("greeks_depth", 0) or 0)
+        corp_actions = int(factors.get("corporate_actions_count", 0) or 0)
+        td_bias = max(-0.5, min(0.5, (oi_gainers - oi_losers) * 0.03))
+        # Penalize confidence when event flow is high.
+        if corp_actions >= 5:
+            td_bias *= 0.75
+        directional_score += td_bias
+        td_note = (
+            f" TrueData context: OI+ {oi_gainers}, OI- {oi_losers}, "
+            f"chain {chain_depth}, greeks {greeks_depth}, corp events {corp_actions}."
+        )
+    abs_score = abs(directional_score)
+    if abs_score < 0.08:
+        decision = "NO_TRADE"
+    elif directional_score > 0:
+        decision = "BUY"
+    else:
+        decision = "SELL"
+
+    confidence = min(0.95, max(0.15, abs_score / 0.8))
+    rr = 1.8
+
+    if decision == "BUY":
+        stop_loss = close - atr
+        target_price = close + (atr * rr)
+        expected_move_pct = ((target_price - close) / close * 100.0) if close else 0.0
+        reason = "Short-term trend and momentum are aligned upward." + td_note
+    elif decision == "SELL":
+        stop_loss = close + atr
+        target_price = close - (atr * rr)
+        expected_move_pct = ((close - target_price) / close * 100.0) if close else 0.0
+        reason = "Short-term trend and momentum are aligned downward." + td_note
+    else:
+        stop_loss = None
+        target_price = None
+        expected_move_pct = 0.0
+        reason = "Price action is range-bound; momentum/trend are weak." + td_note
+
+    return {
+        "symbol": symbol,
+        "decision": decision,
+        "reason": reason,
+        "confidence": round(confidence, 3),
+        "hold_minutes": hold_minutes,
+        "entry_price": round(close, 2) if close else None,
+        "stop_loss": round(stop_loss, 2) if stop_loss is not None else None,
+        "target_price": round(target_price, 2) if target_price is not None else None,
+        "expected_move_pct": round(expected_move_pct, 3),
+        "expected_profit_pct": round(expected_move_pct, 3),
+        "risk_reward": rr if decision != "NO_TRADE" else None,
+        "truedata_bias": round(td_bias, 4),
+        "truedata_context_used": bool(truedata_context),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@api_view(["GET"])
+def intraday_trade_decision(request):
+    """
+    Returns a lightweight intraday plan for chart overlay simulation.
+    Query: symbol=<symbol>&hold_minutes=15
+    """
+    symbol = (request.GET.get("symbol") or "^NSEI").strip()
+    expiry = (request.GET.get("expiry") or "").strip() or None
+    hold_minutes_raw = request.GET.get("hold_minutes", "15")
+    try:
+        hold_minutes = max(1, min(int(hold_minutes_raw), 240))
+    except Exception:
+        hold_minutes = 15
+
+    # Reuse existing history endpoint data source logic.
+    hist_resp = market_history(request, symbol)
+    payload = getattr(hist_resp, "data", {}) or {}
+    rows = payload.get("history") or []
+    td_context = _truedata_decision_context_for_symbol(symbol=symbol, expiry=expiry)
+    decision_payload = _intraday_decision_from_history(
+        symbol=symbol,
+        rows=rows,
+        hold_minutes=hold_minutes,
+        truedata_context=td_context,
+    )
+    decision_payload["price_source"] = payload.get("source")
+    if td_context:
+        decision_payload["truedata_context"] = td_context
+    return Response(decision_payload)
