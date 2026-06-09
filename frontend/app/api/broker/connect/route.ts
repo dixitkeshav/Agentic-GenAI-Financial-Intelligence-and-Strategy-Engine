@@ -54,7 +54,7 @@ export async function POST(req: Request) {
         data: {
           broker,
           success: true,
-          profile,
+          profile: profile as object,
         },
       })
       .catch(() => null);
