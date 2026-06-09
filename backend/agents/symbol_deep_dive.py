@@ -7,6 +7,7 @@ import logging
 from typing import Any, Optional
 
 from .base import BaseAgent
+from fetch_news import newsapi_client as na
 
 logger = logging.getLogger(__name__)
 
@@ -48,21 +49,20 @@ def _fetch_symbol_info_and_history(symbol: str) -> dict:
     return out
 
 
-def _fetch_news_for_symbol(symbol: str, api_key: str, limit: int = 10) -> list:
-    """Fetch relevant news for symbol (Alpha Vantage)."""
-    if not api_key:
+def _fetch_news_for_symbol(symbol: str, limit: int = 10) -> list:
+    """Fetch relevant news for symbol (NewsAPI primary)."""
+    if not na.is_configured():
         return []
     try:
-        import requests
-        r = requests.get(
-            "https://www.alphavantage.co/query",
-            params={"function": "NEWS_SENTIMENT", "tickers": symbol, "apikey": api_key, "limit": limit},
-            timeout=10,
-        )
-        if r.status_code != 200:
-            return []
-        feed = r.json().get("feed", [])
-        return [{"title": i.get("title", ""), "summary": (i.get("summary") or "")[:300], "sentiment": (i.get("overall_sentiment_label") or "Neutral")} for i in feed[:limit]]
+        items = na.fetch_symbol_news(symbol, limit=limit)
+        return [
+            {
+                "title": i.get("title", ""),
+                "summary": (i.get("summary") or "")[:300],
+                "sentiment": "Neutral",
+            }
+            for i in items[:limit]
+        ]
     except Exception as e:
         logger.warning("News fetch for %s: %s", symbol, e)
         return []
@@ -126,12 +126,11 @@ class SymbolDeepDiveAgent(BaseAgent):
         if not symbol:
             return {"error": "No symbol provided", "prediction": "", "similar_stocks": []}
 
-        api_key = context.get("alpha_vantage_api_key") or ""
         symbol_info = _fetch_symbol_info_and_history(symbol)
         if symbol_info.get("error"):
             return {"error": symbol_info["error"], "prediction": "", "similar_stocks": []}
 
-        news = _fetch_news_for_symbol(symbol, api_key, limit=10)
+        news = _fetch_news_for_symbol(symbol, limit=10)
         sector = symbol_info.get("sector") or "Technology"
         similar_tickers = _get_similar_tickers(sector, symbol, max_peers=5)
         movements_summary = _historical_movements_summary(symbol, similar_tickers)
