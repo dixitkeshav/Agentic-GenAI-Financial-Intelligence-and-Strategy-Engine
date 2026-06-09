@@ -1,70 +1,119 @@
 'use client';
 
-import { useState } from 'react';
-import { AgentCard } from '@/components/agents/AgentCard';
-import { AgentPipeline } from '@/components/agents/AgentPipeline';
+import { useEffect, useState } from 'react';
 import { useAgentStore } from '@/store/agentStore';
 import { useAgentInsights } from '@/hooks/useAgentInsights';
-import { Brain } from 'lucide-react';
-import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
+import { PipelineList } from '@/components/fintelli/PipelineList';
+import { AgentCardsGrid } from '@/components/fintelli/AgentCardsGrid';
+import { apiClient, type QuantCatalog } from '@/lib/apiClient';
+
+const DEFAULT_INDICATORS = ['rsi', 'mfi', 'macd_hist', 'sma_20', 'sma_50', 'return_21d', 'volume_sma_ratio'];
 
 export default function AgentsPage() {
   const [ticker, setTicker] = useState('RELIANCE');
   const [activeTicker, setActiveTicker] = useState<string | undefined>(undefined);
-  const insights = useAgentStore((state) => state.insights);
-  const { isLoading, result } = useAgentInsights(activeTicker);
+  const [catalog, setCatalog] = useState<QuantCatalog | null>(null);
+  const [selectedIndicators, setSelectedIndicators] = useState<string[]>(DEFAULT_INDICATORS);
+  const insights = useAgentStore((s) => s.insights);
+  const { isLoading, result } = useAgentInsights(activeTicker, { selectedIndicators });
 
-  const runPipeline = () => {
-    setActiveTicker(ticker.trim() || undefined);
+  useEffect(() => {
+    apiClient.getQuantCatalog().then(setCatalog);
+  }, []);
+
+  const toggleIndicator = (id: string) => {
+    setSelectedIndicators((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
   };
 
+  const sourceCounts = result?.news_sources;
+  const sourceLabel = result?.news_source;
+
   return (
-    <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Brain className="w-6 h-6 text-primary" />
-          Agent Insights
-        </h1>
-        <p className="text-muted-foreground">
-          Full pipeline: news ingestion → sentiment scout → macro → technicals → market reaction → risk → decision
-        </p>
-      </div>
-
-      <div className="flex flex-wrap gap-2 max-w-md">
-        <Input
-          value={ticker}
-          onChange={(e) => setTicker(e.target.value)}
-          placeholder="RELIANCE or ^NSEI"
-          className="flex-1"
-        />
-        <Button onClick={runPipeline} disabled={isLoading}>
-          {isLoading ? 'Running…' : 'Run pipeline'}
-        </Button>
-      </div>
-
-      <AgentPipeline
-        steps={result?.pipeline}
-        isLoading={isLoading}
-        articleCount={result?.article_count}
-        newsSource={result?.news_source}
-        ticker={result?.ticker ?? activeTicker}
-      />
-
-      {isLoading && insights.length === 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {[1, 2, 3, 4, 5, 6].map((i) => (
-            <Skeleton key={i} className="h-40 rounded-xl" />
-          ))}
+    <div>
+      <div className="pg-head">
+        <div className="pg-title">Agent Insights</div>
+        <div className="pg-sub">
+          Merged NewsAPI + Yahoo · FinBERT · extended technicals · /api/agents/run/
         </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {insights.map((insight) => (
-            <AgentCard key={insight.id} insight={insight} />
-          ))}
+      </div>
+
+      <div className="card mb14">
+        <div className="cb">
+          <div className="row" style={{ flexWrap: 'wrap', alignItems: 'flex-end', gap: 10 }}>
+            <div>
+              <label className="flabel">Ticker Symbol</label>
+              <input
+                type="text"
+                className="finput"
+                style={{ width: 200 }}
+                value={ticker}
+                onChange={(e) => setTicker(e.target.value)}
+                placeholder="RELIANCE or NIFTY"
+              />
+            </div>
+            <button
+              type="button"
+              className="btn-pri"
+              onClick={() => setActiveTicker(ticker.trim() || undefined)}
+              disabled={isLoading}
+            >
+              {isLoading ? 'Running…' : '▶ Run Pipeline'}
+            </button>
+          </div>
+          {sourceLabel && (
+            <p className="pg-sub" style={{ marginTop: 10 }}>
+              News: <strong>{sourceLabel}</strong>
+              {sourceCounts && (
+                <>
+                  {' '}
+                  · NewsAPI {sourceCounts.newsapi ?? 0} · Yahoo {sourceCounts.yfinance ?? 0}
+                  {(sourceCounts.finnhub ?? 0) > 0 && <> · Finnhub {sourceCounts.finnhub}</>}
+                  {(sourceCounts.alpha_vantage ?? 0) > 0 && <> · Alpha {sourceCounts.alpha_vantage}</>}
+                </>
+              )}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {catalog && (
+        <div className="card mb14">
+          <div className="ch">
+            <div className="ct">📈 Technical indicators</div>
+            <span className="badge badge-bl">{selectedIndicators.length} selected</span>
+          </div>
+          <div className="cb" style={{ maxHeight: 160, overflowY: 'auto' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {catalog.indicators
+                .filter((i) => i.computed !== false)
+                .map((ind) => (
+                  <button
+                    key={ind.id}
+                    type="button"
+                    className={`badge ${selectedIndicators.includes(ind.id) ? 'badge-gr' : 'badge-am'}`}
+                    style={{ cursor: 'pointer', border: 'none' }}
+                    onClick={() => toggleIndicator(ind.id)}
+                  >
+                    {ind.name}
+                  </button>
+                ))}
+            </div>
+          </div>
         </div>
       )}
+
+      <div className="card mb14">
+        <div className="ch">
+          <div className="ct">🔄 Pipeline Status</div>
+          {result?.article_count != null && <span className="badge badge-bl">{result.article_count} articles</span>}
+        </div>
+        <PipelineList steps={result?.pipeline} isLoading={isLoading} />
+      </div>
+
+      <div className="pg-sub mb14">📊 Agent Results</div>
+      <AgentCardsGrid insights={insights} />
     </div>
   );
 }
