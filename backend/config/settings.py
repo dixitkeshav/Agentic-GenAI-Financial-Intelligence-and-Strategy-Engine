@@ -53,7 +53,12 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8000",
     "http://localhost:8000",
 ]
-CORS_ALLOW_ALL_ORIGINS = True
+_extra_cors = os.getenv("CORS_EXTRA_ORIGINS", "")
+if _extra_cors:
+    CORS_ALLOWED_ORIGINS.extend(
+        origin.strip() for origin in _extra_cors.split(",") if origin.strip()
+    )
+CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", "true").lower() == "true"
 
 # Logging
 LOGGING = {
@@ -135,10 +140,17 @@ except ImportError:
     CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
 
 # Database
+_db_name = os.getenv("DJANGO_DB_PATH")
+if _db_name:
+    _db_name = Path(_db_name)
+else:
+    _db_name = BASE_DIR / 'db.sqlite3'
+_db_name.parent.mkdir(parents=True, exist_ok=True)
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'NAME': _db_name,
     }
 }
 
@@ -176,6 +188,9 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': crontab(hour=15, minute=35),
     },
 }
+
+# TrueData is opt-in only (trial expired / quota limits). Free providers are primary.
+TRUEDATA_ENABLED = os.getenv("TRUEDATA_ENABLED", "false").lower() in ("1", "true", "yes")
 
 # Shock predictor integrations
 NEWSAPI_KEY = os.getenv('NEWSAPI_KEY', '')
