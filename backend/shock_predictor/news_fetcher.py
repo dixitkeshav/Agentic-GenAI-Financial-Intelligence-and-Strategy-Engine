@@ -3,8 +3,8 @@ import logging
 from datetime import timedelta
 
 import feedparser
-import requests
 from django.core.cache import cache
+from fetch_news import newsapi_client as na
 
 logger = logging.getLogger(__name__)
 
@@ -27,33 +27,59 @@ SOURCE_WEIGHTS = {
 }
 
 
-def fetch_headlines_for_date(target_date) -> str:
+def fetch_headlines_for_date(target_date, index_name: str = "NIFTY") -> str:
     """Historical headlines via NewsAPI (backtest). Requires NEWSAPI_KEY in settings."""
-    from django.conf import settings
+    bundle = fetch_headlines_bundle_for_date(target_date, index_name=index_name)
+    return bundle.get("combined_text") or _fallback_headline_for_date(target_date)
 
-    api_key = getattr(settings, 'NEWSAPI_KEY', None) or ''
-    if not api_key:
-        return _fallback_headline_for_date(target_date)
 
-    date_str = target_date.strftime('%Y-%m-%d')
-    next_day = (target_date + timedelta(days=1)).strftime('%Y-%m-%d')
-    url = (
-        f"https://newsapi.org/v2/everything?"
-        f"q=nifty+OR+sensex+OR+RBI+OR+SEBI+OR+india+market&"
-        f"from={date_str}&to={next_day}&"
-        f"language=en&sortBy=relevancy&pageSize=5&"
-        f"apiKey={api_key}"
+def fetch_headlines_bundle_for_date(target_date, index_name: str = "NIFTY") -> dict:
+    """
+    Fetch multiple headlines for a shock day; used for cause classification.
+    Returns { combined_text, headlines: [{title, summary, source}], top_title }.
+    """
+    date_str = target_date.strftime("%Y-%m-%d")
+    next_day = (target_date + timedelta(days=1)).strftime("%Y-%m-%d")
+    idx = (index_name or "NIFTY").upper()
+    query = (
+        f"(NIFTY OR sensex OR banknifty OR {idx}) AND "
+        "(market OR stocks OR RBI OR SEBI OR budget OR tax OR policy OR crash OR rally OR index)"
     )
-    try:
-        resp = requests.get(url, timeout=10)
-        data = resp.json()
-        articles = data.get('articles', [])
-        if articles:
-            a = articles[0]
-            return (a.get('title', '') or '') + '. ' + (a.get('description', '') or '')
-    except Exception as e:
-        logger.debug("NewsAPI fetch failed for %s: %s", target_date, e)
-    return _fallback_headline_for_date(target_date)
+    headlines: list[dict] = []
+    if na.is_configured():
+        try:
+            articles = na.get_everything(
+                query=query,
+                from_param=date_str,
+                to=next_day,
+                language="en",
+                sort_by="relevancy",
+                page_size=15,
+            )
+            for a in articles or []:
+                headlines.append(
+                    {
+                        "title": a.get("title", ""),
+                        "summary": (a.get("summary") or "")[:400],
+                        "source": a.get("source", "NewsAPI"),
+                        "url": a.get("url", "#"),
+                    }
+                )
+        except Exception as e:
+            logger.debug("NewsAPI fetch failed for %s: %s", target_date, e)
+
+    if not headlines:
+        fb = _fallback_headline_for_date(target_date)
+        headlines = [{"title": fb, "summary": fb, "source": "fallback"}]
+
+    combined = " ".join(
+        f"{h.get('title', '')}. {h.get('summary', '')}" for h in headlines[:8]
+    )
+    return {
+        "combined_text": combined[:4000],
+        "headlines": headlines[:10],
+        "top_title": headlines[0].get("title", "") if headlines else "",
+    }
 
 
 def _fallback_headline_for_date(target_date) -> str:
