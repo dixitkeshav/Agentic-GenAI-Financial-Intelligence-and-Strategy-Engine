@@ -1,5 +1,5 @@
 """
-Smoke-test primary data providers (no TrueData required).
+Smoke-test primary data providers.
 
 Run from backend/:
   python manage.py shell < scripts/service_health_check.py
@@ -22,7 +22,6 @@ if __name__ == "__main__":
 
 from fetch_news import finnhub_client as fh
 from fetch_news import newsapi_client as na
-from fetch_news import truedata_bridge as td
 from fetch_news.news_aggregator import fetch_merged_news
 from quant.backtest import run_backtest
 from quant.event_backtest import check_options_chain_available, run_event_backtest
@@ -35,7 +34,6 @@ def check(name: str, ok: bool, detail: str = "") -> dict:
 results: list[dict] = []
 
 # Provider gates
-results.append(check("TrueData disabled", not td.is_available(), f"TRUEDATA_ENABLED={os.getenv('TRUEDATA_ENABLED', 'false')}"))
 results.append(check("NewsAPI configured", na.is_configured(), "NEWSAPI_KEY set" if na.is_configured() else "missing NEWSAPI_KEY"))
 results.append(check("Finnhub configured", fh.is_configured(), "FINNHUB_API_KEY set" if fh.is_configured() else "missing FINNHUB_API_KEY"))
 
