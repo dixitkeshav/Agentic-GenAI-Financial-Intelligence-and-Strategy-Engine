@@ -1,6 +1,7 @@
 from django.urls import path, include
 from .views import (
     dashboard,
+    health,
     fetch_news,
     sentiment_chart_data,
     analyze_news_view,
@@ -27,6 +28,7 @@ from .views import (
 
 urlpatterns = [
     path('', dashboard, name='dashboard'),
+    path('api/health/', health, name='health'),
     path('api/fetch-news/', fetch_news, name='fetch_news'),
     path('api/chart-data/', sentiment_chart_data, name='chart_data'),
     path('api/scanner/', scanner, name='scanner'),
