@@ -1,24 +1,45 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
+.Python
 
-# Environment
+# Environment & secrets — NEVER commit
 .env
+.env.*
+!.env.example
+!.env.*.example
+backend/.env
+frontend/.env
+frontend/.env.local
+DATA_FETCHING/.env
 .env.production
 
-# Database
+# Database (local SQLite only)
 db.sqlite3
+backend/db.sqlite3
+**/db.sqlite3
 
-# Static files
+# Static / logs
 staticfiles/
-
-# Logs
+backend/staticfiles/
 logs/
 *.log
+news_api.log
 
 # Virtual environment
 .venv/
+venv/
 env/
 
-# Local confidential integrations (not for GitHub)
+# OS
+.DS_Store
+
+# Local confidential integrations
 backend/local_integrations/
+
+# Node (root-level if any)
+node_modules/
+
+# Docker local overrides
+.env.production
