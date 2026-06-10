@@ -18,7 +18,7 @@ services:
     rootDir: backend
     buildCommand: bash build.sh
     startCommand: daphne -b 0.0.0.0 -p $PORT config.asgi:application
-    healthCheckPath: /api/fetch-news/?providers=newsapi
+    healthCheckPath: /api/health/
     envVars:
       - key: DATABASE_URL
         fromDatabase:
