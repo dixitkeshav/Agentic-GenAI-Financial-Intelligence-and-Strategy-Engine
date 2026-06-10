@@ -28,7 +28,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 PIPELINE_STEPS = [
-    ("news_fetch", "News ingestion", "Fetch headlines from NewsAPI / TrueData / fallback providers"),
+    ("news_fetch", "News ingestion", "Fetch headlines from NewsAPI and fallback providers"),
     ("news_scout", "News Scout", "Scan sentiment distribution and detect spikes"),
     ("macro_context", "Macro Context", "Link headlines to rates, CPI, GDP, yields"),
     ("technical", "Technical Analysis", "Moving averages, momentum, volatility"),
@@ -73,7 +73,6 @@ class AgentOrchestrator:
         ticker: str = "",
         aggregate_sentiment: str = "neutral",
         news_meta: dict[str, Any] | None = None,
-        truedata_context: dict[str, Any] | None = None,
         selected_indicators: list[str] | None = None,
         selected_patterns: list[str] | None = None,
     ) -> dict[str, Any]:
@@ -106,7 +105,6 @@ class AgentOrchestrator:
             "articles": articles,
             "ticker": ticker,
             "aggregate_sentiment": aggregate_sentiment,
-            "truedata_context": truedata_context or {},
             "selected_indicators": selected_indicators or [],
             "selected_patterns": selected_patterns or [],
         }
@@ -209,7 +207,6 @@ class AgentOrchestrator:
             "news_source": meta.get("source"),
             "news_sources": meta.get("sources"),
             "ticker": ticker or None,
-            "truedata_context": truedata_context or {},
             "selected_indicators": selected_indicators or [],
             "selected_patterns": selected_patterns or [],
         }
