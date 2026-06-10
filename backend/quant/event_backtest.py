@@ -13,7 +13,6 @@ import numpy as np
 import pandas as pd
 
 from fetch_news import newsapi_client as na
-from fetch_news import truedata_bridge as td
 from fetch_news.sentiment import analyze_financial_sentiment
 from quant.indicators import enrich_ohlc
 from quant.strategy_engine import resolve_rules, rules_pass
@@ -73,6 +72,20 @@ def _atm_strike(price: float, symbol: str) -> float:
     return round(p / step) * step
 
 
+def _atm_strike_from_chain(chain_rows: list[dict], price: float) -> float:
+    strikes: list[float] = []
+    for row in chain_rows:
+        for key in ("strike", "Strike", "strikePrice"):
+            if row.get(key) is not None:
+                try:
+                    strikes.append(float(row[key]))
+                except (TypeError, ValueError):
+                    pass
+    if not strikes:
+        return _atm_strike(price, "")
+    return min(strikes, key=lambda s: abs(s - price))
+
+
 def _apply_period(
     df: pd.DataFrame,
     days: int,
@@ -123,12 +136,11 @@ def _build_execution(
         decision = "ENTER_SHORT"
 
     chain_rows = (chain_snapshot or {}).get("data") or []
-    sym_norm = td.normalize_options_symbol(symbol)
     strike_source = "computed_atm"
     option_expiry = (chain_snapshot or {}).get("expiry")
     if chain_rows and mode == "options":
-        strike = td.atm_strike_from_chain(chain_rows, c, sym_norm)
-        strike_source = "truedata_chain"
+        strike = _atm_strike_from_chain(chain_rows, c)
+        strike_source = "chain_atm"
         options_proxy = False
     else:
         strike = _atm_strike(c, symbol)
@@ -186,7 +198,7 @@ def _build_execution(
         "chain_source": (chain_snapshot or {}).get("source") if mode == "options" else None,
         "session": (
             "NSE F&O (live chain)"
-            if mode == "options" and strike_source == "truedata_chain"
+            if mode == "options" and strike_source == "chain_atm"
             else "NSE F&O (proxy on underlying)"
             if options_proxy and mode == "options"
             else "NSE F&O"
@@ -297,7 +309,7 @@ def _options_yfinance_candidates(symbol: str) -> list[str]:
 
 
 def check_options_chain_available(symbol: str, expiry: str | None = None) -> dict[str, Any]:
-    """Yahoo Finance first; TrueData optional when explicitly enabled."""
+    """Yahoo Finance options chain availability."""
     sym = _normalize_ticker(symbol)
     tried: list[str] = []
     try:
@@ -319,10 +331,6 @@ def check_options_chain_available(symbol: str, expiry: str | None = None) -> dic
 
         is_index = sym in _INDEX_UNDERLYINGS or sym.startswith("^") or "NIFTY" in sym or "SENSEX" in sym
         if is_index:
-            if td.is_available():
-                info = td.check_options_chain(symbol, expiry=expiry)
-                if info.get("available"):
-                    return info
             return {
                 "available": True,
                 "proxy": True,
@@ -336,11 +344,6 @@ def check_options_chain_available(symbol: str, expiry: str | None = None) -> dic
                     "Using underlying OHLC with options strategy proxy."
                 ),
             }
-
-        if td.is_available():
-            info = td.check_options_chain(symbol, expiry=expiry)
-            if info.get("available"):
-                return info
 
         return {
             "available": True,
@@ -500,7 +503,7 @@ def run_event_backtest(
         tpl_meta["compile"] = compile_info
 
     options_info = check_options_chain_available(ticker)
-    chain_snapshot = options_info.get("chain") if options_info.get("source") == "truedata" else None
+    chain_snapshot = options_info.get("chain") if options_info.get("source") == "yfinance" else None
 
     if mode == "options" and not options_info.get("available"):
         return {
