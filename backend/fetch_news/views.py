@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "YOUR_API_KEY_HERE")
 
 
+@require_GET
+def health(request):
+    """Lightweight liveness probe for Render — no ML or external API calls."""
+    return JsonResponse({"status": "ok"})
+
+
 def _looks_like_corporate_notice(title: str) -> bool:
     t = (title or "").strip().lower()
     if not t:
