@@ -15,7 +15,6 @@ from .models import NewsArticle
 from .sentiment import analyze_financial_sentiment
 from . import finnhub_client as fh
 from . import newsapi_client as na
-from . import truedata_bridge as td
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
@@ -77,8 +76,6 @@ def fetch_news(request):
 
     use_newsapi = na.is_configured() and ((not requested) or ("newsapi" in requested))
     use_alpha = (not requested) or ("alpha_vantage" in requested) or ("alpha" in requested)
-    # TrueData only when explicitly requested — free providers are primary.
-    use_truedata = td.is_available() and ("truedata" in requested)
     use_finnhub = fh.is_configured() and (
         (not requested) or ("finnhub" in requested) or (("alpha_vantage" in requested) and len(requested) == 1)
     )
@@ -158,17 +155,6 @@ def fetch_news(request):
                     }
                 )
             sources.append("finnhub")
-
-    if not articles and use_truedata:
-        td_articles = td.fetch_news(limit=30, include_corporate=False)
-        if td_articles:
-            filtered = [
-                a for a in td_articles
-                if not _looks_like_corporate_notice(a.get("title", ""))
-            ]
-            if filtered:
-                articles.extend(filtered)
-                sources.append("truedata")
 
     articles = _dedupe_articles(articles)[:30]
 
@@ -394,11 +380,6 @@ def custom_sentiment(request):
                     "source": "alpha_vantage",
                 }
             )
-        if td.is_available():
-            out = td.aggregate_symbol_sentiment(ticker)
-            if out and out.get("count", 0):
-                out["source"] = "truedata"
-                return Response(out)
         return Response({"sentiment": "neutral", "count": 0, "source": "none"})
     except Exception as e:
         return Response({"error": str(e), "sentiment": "neutral"}, status=500)
@@ -554,9 +535,6 @@ def agents_run(request):
                             )
 
         fetch_ms = (_time.perf_counter() - fetch_started) * 1000
-        td_context = {}
-        if ticker and td.is_available():
-            td_context = _truedata_decision_context_for_symbol(symbol=ticker)
         agg = "neutral"
         if articles:
             p = sum(1 for a in articles if (a.get("sentiment") or "").lower() == "positive")
@@ -574,7 +552,6 @@ def agents_run(request):
                 "fetch_ms": fetch_ms,
                 "sources": news_source_counts,
             },
-            truedata_context=td_context,
             selected_indicators=selected_indicators,
             selected_patterns=selected_patterns,
         )
@@ -1245,13 +1222,10 @@ def _options_chain_yfinance(symbol: str, expiry: str) -> dict:
     }
 
 
-# ——— Options chain (yfinance / Finnhub primary; TrueData optional) ———
+# ——— Options chain (yfinance / Finnhub) ———
 @api_view(["GET"])
 def options_chain(request):
-    """
-    Options chain: Yahoo Finance and Finnhub for global symbols;
-    TrueData only when TRUEDATA_ENABLED=true.
-    """
+    """Options chain via Yahoo Finance and Finnhub."""
     symbol = (request.GET.get("symbol") or "").strip().upper()
     if not symbol:
         symbol = "AAPL"
@@ -1281,23 +1255,6 @@ def options_chain(request):
                     "source": "finnhub",
                 }
                 cache.set(cache_key, payload, timeout=120)
-                return Response(payload)
-
-        if td.is_available():
-            td_payload = td.get_symbol_option_chain(symbol=symbol, expiry=expiry or None)
-            td_rows = td_payload.get("data") or td_payload.get("rows") or []
-            td_expiries = td_payload.get("expiries") or []
-            if td_rows or td_expiries:
-                payload = {
-                    "symbol": td_payload.get("symbol") or symbol,
-                    "symbol_requested": td_payload.get("symbol_requested") or symbol,
-                    "expiry": td_payload.get("expiry"),
-                    "expiries": td_expiries,
-                    "data": td_rows,
-                    "source": "truedata",
-                    "error": td_payload.get("error") if not td_rows else None,
-                }
-                cache.set(cache_key, payload, timeout=60)
                 return Response(payload)
 
         err_msg = payload.get("error") or "No chain data"
@@ -1333,79 +1290,10 @@ def _safe_float(val, default=0.0):
         return default
 
 
-def _truedata_decision_context_for_symbol(symbol: str, expiry: str | None = None) -> dict:
-    """
-    Best-effort TrueData market + greeks + corporate snapshot for signal enrichment.
-    """
-    if not td.is_available():
-        return {}
-    unavailable = []
-    ctx: dict[str, Any] = {"symbol": symbol, "expiry": expiry, "source": "truedata"}
-    try:
-        ltp = td.call_api("getLTP", symbol=symbol)
-        if isinstance(ltp, dict) and ltp.get("error"):
-            unavailable.append("getLTP")
-        ctx["ltp"] = ltp
-
-        option_chain = td.call_api("getOptionChainLive", symbol=symbol, expiry=expiry)
-        if isinstance(option_chain, dict) and option_chain.get("error"):
-            option_chain = td.call_api("getSymbolOptionChain", symbol=symbol, expiry=expiry)
-        if isinstance(option_chain, dict) and option_chain.get("error"):
-            unavailable.append("getOptionChainLive/getSymbolOptionChain")
-        ctx["option_chain_live"] = option_chain
-
-        greeks = td.call_api("getOptionChainwithGreeks", symbol=symbol, expiry=expiry)
-        if isinstance(greeks, dict) and greeks.get("error"):
-            unavailable.append("getOptionChainwithGreeks")
-        ctx["option_chain_greeks"] = greeks
-
-        oi_gainers = td.call_api("getOIGainers", symbol=symbol)
-        if isinstance(oi_gainers, dict) and oi_gainers.get("error"):
-            unavailable.append("getOIGainers")
-        ctx["oi_gainers"] = oi_gainers
-
-        oi_losers = td.call_api("getOILosers", symbol=symbol)
-        if isinstance(oi_losers, dict) and oi_losers.get("error"):
-            unavailable.append("getOILosers")
-        ctx["oi_losers"] = oi_losers
-
-        corp_actions = td.call_api("getCorpAction", symbol=symbol)
-        if isinstance(corp_actions, dict) and corp_actions.get("error"):
-            unavailable.append("getCorpAction")
-        ctx["corporate_actions"] = corp_actions
-    except Exception:
-        return {}
-
-    def _rows(obj):
-        if isinstance(obj, list):
-            return obj
-        if isinstance(obj, dict):
-            for key in ("data", "rows", "items", "result", "results"):
-                if isinstance(obj.get(key), list):
-                    return obj[key]
-        return []
-
-    oi_gain_rows = _rows(ctx.get("oi_gainers"))
-    oi_loss_rows = _rows(ctx.get("oi_losers"))
-    chain_rows = _rows(ctx.get("option_chain_live"))
-    greeks_rows = _rows(ctx.get("option_chain_greeks"))
-    corporate_action_rows = _rows(ctx.get("corporate_actions"))
-    ctx["decision_factors"] = {
-        "oi_gainers_count": len(oi_gain_rows),
-        "oi_losers_count": len(oi_loss_rows),
-        "chain_depth": len(chain_rows),
-        "greeks_depth": len(greeks_rows),
-        "corporate_actions_count": len(corporate_action_rows),
-    }
-    ctx["unavailable_apis"] = sorted(set(unavailable))
-    return ctx
-
-
 def _intraday_decision_from_history(
     symbol: str,
     rows: list[dict],
     hold_minutes: int,
-    truedata_context: dict | None = None,
 ) -> dict:
     if len(rows) < 20:
         return {
@@ -1458,24 +1346,6 @@ def _intraday_decision_from_history(
     atr = max(atr, close * 0.001) if close else atr
 
     directional_score = (0.65 * trend_score) + (0.35 * momentum_5)
-    td_bias = 0.0
-    td_note = ""
-    if truedata_context:
-        factors = truedata_context.get("decision_factors") or {}
-        oi_gainers = int(factors.get("oi_gainers_count", 0) or 0)
-        oi_losers = int(factors.get("oi_losers_count", 0) or 0)
-        chain_depth = int(factors.get("chain_depth", 0) or 0)
-        greeks_depth = int(factors.get("greeks_depth", 0) or 0)
-        corp_actions = int(factors.get("corporate_actions_count", 0) or 0)
-        td_bias = max(-0.5, min(0.5, (oi_gainers - oi_losers) * 0.03))
-        # Penalize confidence when event flow is high.
-        if corp_actions >= 5:
-            td_bias *= 0.75
-        directional_score += td_bias
-        td_note = (
-            f" TrueData context: OI+ {oi_gainers}, OI- {oi_losers}, "
-            f"chain {chain_depth}, greeks {greeks_depth}, corp events {corp_actions}."
-        )
     abs_score = abs(directional_score)
     if abs_score < 0.08:
         decision = "NO_TRADE"
@@ -1491,17 +1361,17 @@ def _intraday_decision_from_history(
         stop_loss = close - atr
         target_price = close + (atr * rr)
         expected_move_pct = ((target_price - close) / close * 100.0) if close else 0.0
-        reason = "Short-term trend and momentum are aligned upward." + td_note
+        reason = "Short-term trend and momentum are aligned upward."
     elif decision == "SELL":
         stop_loss = close + atr
         target_price = close - (atr * rr)
         expected_move_pct = ((close - target_price) / close * 100.0) if close else 0.0
-        reason = "Short-term trend and momentum are aligned downward." + td_note
+        reason = "Short-term trend and momentum are aligned downward."
     else:
         stop_loss = None
         target_price = None
         expected_move_pct = 0.0
-        reason = "Price action is range-bound; momentum/trend are weak." + td_note
+        reason = "Price action is range-bound; momentum/trend are weak."
 
     return {
         "symbol": symbol,
@@ -1515,8 +1385,6 @@ def _intraday_decision_from_history(
         "expected_move_pct": round(expected_move_pct, 3),
         "expected_profit_pct": round(expected_move_pct, 3),
         "risk_reward": rr if decision != "NO_TRADE" else None,
-        "truedata_bias": round(td_bias, 4),
-        "truedata_context_used": bool(truedata_context),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -1539,14 +1407,10 @@ def intraday_trade_decision(request):
     hist_resp = market_history(request, symbol)
     payload = getattr(hist_resp, "data", {}) or {}
     rows = payload.get("history") or []
-    td_context = _truedata_decision_context_for_symbol(symbol=symbol, expiry=expiry)
     decision_payload = _intraday_decision_from_history(
         symbol=symbol,
         rows=rows,
         hold_minutes=hold_minutes,
-        truedata_context=td_context,
     )
     decision_payload["price_source"] = payload.get("source")
-    if td_context:
-        decision_payload["truedata_context"] = td_context
     return Response(decision_payload)
