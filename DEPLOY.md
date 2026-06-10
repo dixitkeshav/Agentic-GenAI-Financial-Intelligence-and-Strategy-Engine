@@ -44,7 +44,8 @@ New → **Blueprint** → connect GitHub repo → Render reads `render.yaml`.
 | Type | Web Service |
 | Root Directory | `backend` |
 | Runtime | Python 3 |
-| Build Command | `./build.sh` |
+| Build Command | `bash build.sh` |
+| Health Check Path | `/api/health/` |
 | Start Command | `daphne -b 0.0.0.0 -p $PORT config.asgi:application` |
 | Plan | Free |
 
@@ -79,14 +80,16 @@ Copy API URL: `https://fintelli-api.onrender.com` (yours will differ).
 
 | Key | Value |
 |-----|--------|
-| `DATABASE_URL` | Postgres **External** URL (same DB as Django) |
+| `DATABASE_URL` | Postgres **External** URL + `?sslmode=require` (same DB as Django) |
 | `NEXT_PUBLIC_API_URL` | `https://your-api.onrender.com` |
 | `NEXT_PUBLIC_WS_URL` | `wss://your-api.onrender.com` |
 | `NEXTAUTH_SECRET` | Random string |
 | `NEXTAUTH_URL` | `https://your-app.vercel.app` |
 | `DASHBOARD_PASSWORD` | Demo login password |
 
-`vercel.json` runs `prisma migrate deploy` on each build to create Prisma tables.
+`vercel.json` runs `scripts/vercel-db-sync.sh` on each build. On a shared Postgres (Django + Prisma), the first deploy baselines Prisma migrations (P3005); later builds apply new migrations normally.
+
+**Important:** Append `?sslmode=require` to the Render **External** `DATABASE_URL` in Vercel.
 
 4. Deploy → copy Vercel URL
 5. Go back to Render → set `CORS_EXTRA_ORIGINS` to your Vercel URL → redeploy backend
