@@ -3,6 +3,9 @@ django>=4.2,<5.2
 djangorestframework>=3.14
 django-cors-headers>=4.3
 python-dotenv>=1.0
+dj-database-url>=2.1
+psycopg2-binary>=2.9
+whitenoise>=6.6
 requests>=2.31
 newsapi-python>=0.2.7
 feedparser>=6.0.10
@@ -43,6 +46,3 @@ scipy>=1.11
 structlog>=24.1
 pyyaml>=6.0
 beautifulsoup4>=4.12
-
-# Optional market-data providers
-truedata-ws>=5.0
