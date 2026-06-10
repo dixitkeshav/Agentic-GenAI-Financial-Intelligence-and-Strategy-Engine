@@ -9,7 +9,6 @@ from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
-from fetch_news import truedata_bridge as td
 from fetch_news import newsapi_client as na
 from fetch_news.sentiment import analyze_financial_sentiment
 
@@ -294,13 +293,6 @@ def _prices_from_history_payload(history: list[dict]) -> Optional[pd.Series]:
     return pd.Series(vals, index=idx).sort_index()
 
 
-def _prices_from_truedata(symbol: str, days: int = 365) -> Optional[pd.Series]:
-    rows = td.get_price_history(symbol=symbol, days=days)
-    if not rows:
-        return None
-    return _prices_from_history_payload(rows)
-
-
 def run_backtest(
     ticker: str = "AAPL",
     sentiment_series: Optional[pd.Series] = None,
@@ -330,11 +322,6 @@ def run_backtest(
     if prices is None or len(prices) < 10:
         prices = _fetch_prices(ticker, days)
         data_source = "yfinance"
-    if (prices is None or len(prices) < 10) and td.is_available():
-        td_prices = _prices_from_truedata(ticker, days=days)
-        if td_prices is not None and len(td_prices) >= 10:
-            prices = td_prices
-            data_source = "truedata"
     if prices is None or len(prices) < 10:
         yf_hint = ", ".join(_candidate_yfinance_symbols(ticker)) or _normalize_ticker_for_yfinance(ticker)
         return {
@@ -391,12 +378,6 @@ def run_backtest(
             "Daily close prices from Zerodha Kite Connect (NSE). "
             + explanation.get("methodology", "")
         )
-    elif data_source == "truedata":
-        explanation["methodology"] = (
-            "Daily close prices from TrueData historical services. "
-            + explanation.get("methodology", "")
-        )
-
     return {
         "ticker": ticker,
         "price_source": data_source,
