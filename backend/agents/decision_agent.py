@@ -83,19 +83,7 @@ class DecisionAgent(BaseAgent):
         recommendation = _call_llm_debate(summaries, context)
         structured = _rule_decision(context)
         if not recommendation:
-            td_ctx = context.get("truedata_context") or {}
-            td_factors = td_ctx.get("decision_factors") or {}
-            oi_gainers = int(td_factors.get("oi_gainers_count", 0) or 0)
-            oi_losers = int(td_factors.get("oi_losers_count", 0) or 0)
-            recommendation = (
-                f"{structured['headline']} "
-                + " ".join(structured["reasons"])
-                + (
-                    f" Derivatives breadth (OI gainers {oi_gainers} vs losers {oi_losers}) informs short-term conviction."
-                    if (oi_gainers or oi_losers)
-                    else ""
-                )
-            )
+            recommendation = f"{structured['headline']} " + " ".join(structured["reasons"])
 
         self._remember(
             {
