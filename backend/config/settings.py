@@ -38,6 +38,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -106,19 +107,19 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 ASGI_APPLICATION = 'config.asgi.application'
 
-# Redis (optional - used for cache and Celery)
-REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
-CACHES = {
-    "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": REDIS_URL,
-        "OPTIONS": {"CLIENT_CLASS": "django_redis.client.DefaultClient"},
+# Redis (optional — omit on Render free tier; locmem + in-memory channels used instead)
+REDIS_URL = os.getenv("REDIS_URL", "").strip() or (
+    "redis://127.0.0.1:6379/0" if os.getenv("DJANGO_DEBUG", "True") == "True" else ""
+)
+if REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": REDIS_URL,
+            "OPTIONS": {"CLIENT_CLASS": "django_redis.client.DefaultClient"},
+        }
     }
-}
-# Fallback to locmem if django_redis not installed
-try:
-    from django_redis import get_redis_connection
-except ImportError:
+else:
     CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 
 # Feature flags (env-based)
@@ -127,32 +128,48 @@ FEATURE_AGENTS = os.getenv("FEATURE_AGENTS", "true").lower() == "true"
 FEATURE_QUANT_SIGNALS = os.getenv("FEATURE_QUANT_SIGNALS", "true").lower() == "true"
 FEATURE_WEBSOCKETS = os.getenv("FEATURE_WEBSOCKETS", "true").lower() == "true"
 
-# Channels (WebSockets) - use InMemory when Redis not available
-try:
-    import channels_redis
-    CHANNEL_LAYERS = {
-        "default": {
-            "BACKEND": "channels_redis.core.RedisChannelLayer",
-            "CONFIG": {"hosts": [os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")]},
+# Channels (WebSockets) — Redis when configured, else in-memory (fine for free tier)
+if REDIS_URL:
+    try:
+        import channels_redis  # noqa: F401
+
+        CHANNEL_LAYERS = {
+            "default": {
+                "BACKEND": "channels_redis.core.RedisChannelLayer",
+                "CONFIG": {"hosts": [REDIS_URL]},
+            }
         }
-    }
-except ImportError:
+    except ImportError:
+        CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+else:
     CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
 
-# Database
-_db_name = os.getenv("DJANGO_DB_PATH")
-if _db_name:
-    _db_name = Path(_db_name)
-else:
-    _db_name = BASE_DIR / 'db.sqlite3'
-_db_name.parent.mkdir(parents=True, exist_ok=True)
+# Database — shared PostgreSQL via DATABASE_URL (Render); SQLite for local dev without it
+_database_url = os.getenv("DATABASE_URL", "").strip()
+if _database_url:
+    import dj_database_url
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': _db_name,
+    DATABASES = {
+        "default": dj_database_url.config(
+            default=_database_url,
+            conn_max_age=600,
+            conn_health_checks=True,
+            ssl_require=os.getenv("DATABASE_SSL", "true").lower() in ("1", "true", "yes"),
+        )
     }
-}
+else:
+    _db_name = os.getenv("DJANGO_DB_PATH")
+    if _db_name:
+        _db_name = Path(_db_name)
+    else:
+        _db_name = BASE_DIR / "db.sqlite3"
+    _db_name.parent.mkdir(parents=True, exist_ok=True)
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": _db_name,
+        }
+    }
 
 # Password Validators
 AUTH_PASSWORD_VALIDATORS = [
@@ -189,9 +206,6 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
-# TrueData is opt-in only (trial expired / quota limits). Free providers are primary.
-TRUEDATA_ENABLED = os.getenv("TRUEDATA_ENABLED", "false").lower() in ("1", "true", "yes")
-
 # Shock predictor integrations
 NEWSAPI_KEY = os.getenv('NEWSAPI_KEY', '')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
@@ -204,6 +218,11 @@ STATICFILES_DIRS = [
 ]
 
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+STORAGES = {
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 ROOT_URLCONF = 'config.urls'
 
