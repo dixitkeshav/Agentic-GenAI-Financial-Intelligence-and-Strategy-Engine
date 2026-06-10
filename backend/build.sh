@@ -5,7 +5,9 @@ set -o errexit
 cd "$(dirname "$0")"
 
 pip install --upgrade pip
-pip install -r ../requirements.txt
+# CPU-only PyTorch — avoids huge CUDA wheels and build timeouts on Render free tier
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt
 
 python manage.py collectstatic --noinput
 python manage.py migrate --noinput
