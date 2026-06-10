@@ -11,7 +11,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from fetch_news import truedata_bridge as td
 from quant.event_backtest import run_event_backtest
 from quant.indicators import enrich_ohlc
 
@@ -98,12 +97,6 @@ def _fetch_ohlc(symbol: str, days: int) -> tuple[pd.DataFrame | None, str]:
             return frame.sort_index().tail(days), "yfinance"
     except Exception:
         pass
-
-    if td.is_available():
-        rows = td.get_price_history(symbol=symbol, days=max(90, days + 30))
-        df = _to_ohlc(rows or [])
-        if df is not None:
-            return df.tail(days), "truedata"
 
     return None, "none"
 
