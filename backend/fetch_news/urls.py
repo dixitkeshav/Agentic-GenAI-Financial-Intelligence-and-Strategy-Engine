@@ -24,15 +24,6 @@ from .views import (
     options_chain,
     intraday_trade_decision,
 )
-from .truedata_views import (
-    truedata_status,
-    truedata_news,
-    truedata_ltp_bulk,
-    truedata_option_chain,
-    truedata_endpoints,
-    truedata_call,
-    truedata_decision_context,
-)
 
 urlpatterns = [
     path('', dashboard, name='dashboard'),
@@ -58,12 +49,5 @@ urlpatterns = [
     path('api/evaluation/sentiment-accuracy/', evaluation_sentiment_accuracy, name='evaluation_sentiment_accuracy'),
     path('api/evaluation/latency/', evaluation_latency, name='evaluation_latency'),
     path('api/cross-domain/', cross_domain_news, name='cross_domain_news'),
-    path('api/truedata/status/', truedata_status, name='truedata_status'),
-    path('api/truedata/news/', truedata_news, name='truedata_news'),
-    path('api/truedata/ltp-bulk/', truedata_ltp_bulk, name='truedata_ltp_bulk'),
-    path('api/truedata/options-chain/', truedata_option_chain, name='truedata_option_chain'),
-    path('api/truedata/endpoints/', truedata_endpoints, name='truedata_endpoints'),
-    path('api/truedata/call/<str:api_name>/', truedata_call, name='truedata_call'),
-    path('api/truedata/decision-context/', truedata_decision_context, name='truedata_decision_context'),
     path('api/shock/', include('shock_predictor.urls')),
 ]
