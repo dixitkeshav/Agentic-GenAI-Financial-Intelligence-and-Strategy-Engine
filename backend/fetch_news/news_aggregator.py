@@ -1,6 +1,5 @@
 """
 Merge NewsAPI, yfinance, Finnhub, and Alpha Vantage into one deduplicated feed with FinBERT sentiment.
-TrueData is opt-in only (TRUEDATA_ENABLED=true); free providers are primary.
 """
 from __future__ import annotations
 
@@ -13,7 +12,6 @@ import requests
 
 from fetch_news import finnhub_client as fh
 from fetch_news import newsapi_client as na
-from fetch_news import truedata_bridge as td
 from fetch_news.newsapi_client import _normalize_news_symbol
 
 logger = logging.getLogger(__name__)
@@ -166,7 +164,6 @@ def fetch_merged_news(
     """
     Returns { articles, sources, counts }.
     Primary providers: NewsAPI → yfinance → Finnhub → Alpha Vantage.
-    TrueData only when TRUEDATA_ENABLED=true.
     """
     merged: dict[str, dict[str, Any]] = {}
     source_counts: dict[str, int] = {
@@ -174,7 +171,6 @@ def fetch_merged_news(
         "yfinance": 0,
         "finnhub": 0,
         "alpha_vantage": 0,
-        "truedata": 0,
     }
 
     def add_batch(rows: list[dict[str, Any]], provider: str) -> None:
@@ -205,20 +201,6 @@ def fetch_merged_news(
         add_batch(_fetch_yfinance_news(sym, limit=min(limit, 20)), "yfinance")
         add_batch(_fetch_finnhub_news(sym, limit=min(limit, 15)), "finnhub")
         add_batch(_fetch_alpha_vantage_news(sym, limit=min(limit, 15)), "alpha_vantage")
-        if td.is_available():
-            add_batch(
-                [
-                    {
-                        "title": i.get("title", ""),
-                        "summary": i.get("summary", ""),
-                        "url": i.get("url", "#"),
-                        "source": i.get("source", "TrueData"),
-                        "time_published": i.get("time_published", ""),
-                    }
-                    for i in td.fetch_news(limit=min(limit, 15), symbol=sym)
-                ],
-                "truedata",
-            )
     elif include_market or not symbol:
         if na.is_configured():
             add_batch(
