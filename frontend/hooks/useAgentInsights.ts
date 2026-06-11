@@ -132,7 +132,7 @@ export function useAgentInsights(ticker?: string, options?: AgentInsightsOptions
             signal: 'NEUTRAL',
             confidence: 0,
             explanation:
-              'Could not reach the agent API. Ensure Django is running (see banner above).',
+              'Could not reach the agent API. If deployed on Render free tier, wait for the backend to wake up (~60s) and run again.',
             timestamp: new Date(),
           },
         ]);
