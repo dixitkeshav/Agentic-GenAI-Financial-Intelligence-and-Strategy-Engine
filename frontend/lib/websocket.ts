@@ -1,4 +1,11 @@
-const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
+function resolveWsBaseUrl(): string {
+  const raw =
+    process.env.NEXT_PUBLIC_WS_URL?.replace(/\/$/, '') ||
+    process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ||
+    'http://127.0.0.1:8000';
+  if (raw.startsWith('ws://') || raw.startsWith('wss://')) return raw;
+  return raw.replace(/^http/, 'ws');
+}
 
 export class WebSocketClient {
   private ws: WebSocket | null = null;
@@ -13,7 +20,7 @@ export class WebSocketClient {
   connect(onMessage: (data: unknown) => void, onError?: (error: Event) => void) {
     try {
       this.shouldReconnect = true;
-      this.ws = new WebSocket(`${WS_BASE_URL}${this.endpoint}`);
+      this.ws = new WebSocket(`${resolveWsBaseUrl()}${this.endpoint}`);
 
       this.ws.onopen = () => {
         console.log(`WebSocket connected to ${this.endpoint}`);
