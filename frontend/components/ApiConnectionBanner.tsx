@@ -33,10 +33,17 @@ export function ApiConnectionBanner() {
       <div>
         <p style={{ fontWeight: 600, color: 'var(--red)', fontSize: 13 }}>Backend API not connected</p>
         <p style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
-          {message || `Cannot reach ${backendUrl}`}. Start Django:{' '}
-          <code style={{ background: 'var(--bg-surface)', padding: '2px 6px', borderRadius: 4 }}>
-            cd backend && python manage.py runserver
-          </code>
+          {message || `Cannot reach ${backendUrl}`}.
+          {backendUrl.includes('onrender.com')
+            ? ' Render free tier may be waking up — wait ~60s and click Retry.'
+            : (
+              <>
+                {' '}Start Django:{' '}
+                <code style={{ background: 'var(--bg-surface)', padding: '2px 6px', borderRadius: 4 }}>
+                  cd backend && python manage.py runserver
+                </code>
+              </>
+            )}
         </p>
       </div>
       <button type="button" className="btn-ghost" onClick={() => refetch()}>
