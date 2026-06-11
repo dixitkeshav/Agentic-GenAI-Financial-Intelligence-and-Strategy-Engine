@@ -86,7 +86,7 @@ export default function AgentsPage() {
           </div>
           <div className="cb" style={{ maxHeight: 160, overflowY: 'auto' }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {catalog.indicators
+              {(catalog.indicators ?? [])
                 .filter((i) => i.computed !== false)
                 .map((ind) => (
                   <button
