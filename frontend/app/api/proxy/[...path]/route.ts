@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+/** Local dev only — production browsers call Render directly (see lib/apiBase.ts). */
+export const maxDuration = 60;
+
 const DJANGO_ORIGIN =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') || 'http://127.0.0.1:8000';
 
