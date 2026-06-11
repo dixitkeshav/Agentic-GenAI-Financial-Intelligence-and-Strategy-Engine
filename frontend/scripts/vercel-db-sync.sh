@@ -9,15 +9,67 @@ if [ -z "${DATABASE_URL:-}" ]; then
   exit 0
 fi
 
+# Render Internal URLs (no domain) only work from Render services, not Vercel builds.
+if [[ "${DATABASE_URL}" =~ @dpg-[^@/]+/ ]] && [[ ! "${DATABASE_URL}" =~ render\.com ]]; then
+  echo "WARNING: DATABASE_URL looks like Render Internal URL (not reachable from Vercel)." >&2
+  echo "Use Render Postgres → Connections → External Database URL + ?sslmode=require" >&2
+  if [ "${PRISMA_REQUIRE_DB_SYNC:-}" = "true" ]; then
+    exit 1
+  fi
+  echo "Skipping Prisma DB sync (set PRISMA_REQUIRE_DB_SYNC=true to fail builds instead)"
+  exit 0
+fi
+
+if [[ ! "${DATABASE_URL}" =~ sslmode= ]]; then
+  echo "WARNING: DATABASE_URL missing sslmode=require (required for Render external Postgres)" >&2
+fi
+
 MIGRATION_NAME="20260507000000_init_edge"
 MIGRATION_SQL="prisma/migrations/${MIGRATION_NAME}/migration.sql"
 ERR_FILE="$(mktemp)"
 trap 'rm -f "$ERR_FILE"' EXIT
 
-if npx prisma migrate deploy 2>"$ERR_FILE"; then
-  echo "Prisma migrations applied"
-  exit 0
-fi
+MAX_ATTEMPTS="${PRISMA_CONNECT_RETRIES:-5}"
+RETRY_DELAY="${PRISMA_CONNECT_RETRY_DELAY:-15}"
+
+run_migrate_deploy() {
+  : >"$ERR_FILE"
+  if npx prisma migrate deploy 2>"$ERR_FILE"; then
+    return 0
+  fi
+  return 1
+}
+
+attempt=1
+while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
+  if run_migrate_deploy; then
+    echo "Prisma migrations applied"
+    exit 0
+  fi
+
+  if grep -q "P1001" "$ERR_FILE"; then
+    echo "Prisma P1001 (database unreachable), attempt ${attempt}/${MAX_ATTEMPTS}…" >&2
+    if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+      sleep "$RETRY_DELAY"
+      attempt=$((attempt + 1))
+      continue
+    fi
+
+    cat "$ERR_FILE" >&2
+    echo "" >&2
+    echo "Render Postgres unreachable from Vercel after ${MAX_ATTEMPTS} attempts." >&2
+    echo "Check: Postgres is active (free tier expires after 90d idle), External URL, sslmode=require." >&2
+
+    if [ "${PRISMA_REQUIRE_DB_SYNC:-}" = "true" ]; then
+      exit 1
+    fi
+
+    echo "Skipping Prisma DB sync so the frontend build can continue (tables should already exist)."
+    exit 0
+  fi
+
+  break
+done
 
 if ! grep -q "P3005" "$ERR_FILE"; then
   cat "$ERR_FILE" >&2
