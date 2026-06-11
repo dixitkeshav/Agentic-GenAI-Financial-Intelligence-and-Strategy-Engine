@@ -13,11 +13,13 @@ export function useLiveTicker() {
   const hasInitialized = useRef(false);
   const wsRef = useRef<WebSocketClient | null>(null);
 
-  const { data: tickers = [] } = useQuery({
+  const { data: tickers = [], isSuccess: tickerLoaded } = useQuery({
     queryKey: ['live-ticker'],
     queryFn: () => apiClient.getLiveTicker(),
     refetchInterval: 30000, // 30 seconds
     staleTime: 60000,
+    retry: 3,
+    retryDelay: (attempt) => Math.min(15000, 3000 * (attempt + 1)),
   });
 
   useEffect(() => {
@@ -34,8 +36,9 @@ export function useLiveTicker() {
     hasInitialized.current = true;
   }, [tickers, setIndices]);
 
-  // Optional WS overlay: keeps existing polling fallback intact.
+  // Optional WS overlay after REST succeeds — avoids noisy failures during Render cold start.
   useEffect(() => {
+    if (!tickerLoaded || !tickers.length) return;
     wsRef.current = new WebSocketClient('/ws/dashboard/');
     wsRef.current.connect((raw) => {
       if (!raw || typeof raw !== 'object') return;
@@ -60,7 +63,7 @@ export function useLiveTicker() {
       wsRef.current?.disconnect();
       wsRef.current = null;
     };
-  }, [updateIndex]);
+  }, [tickerLoaded, tickers.length, updateIndex]);
 
   return tickers;
 }
