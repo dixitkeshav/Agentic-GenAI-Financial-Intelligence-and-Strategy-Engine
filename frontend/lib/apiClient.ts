@@ -21,7 +21,12 @@ async function djangoFetch(path: string, init?: RequestInit): Promise<Response> 
 
 async function djangoJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await djangoFetch(path, init);
-  const data = (await response.json().catch(() => ({}))) as T & { error?: string; detail?: string };
+  const contentType = response.headers.get('content-type') || '';
+  const data = (
+    contentType.includes('application/json')
+      ? await response.json().catch(() => ({}))
+      : {}
+  ) as T & { error?: string; detail?: string };
   if (!response.ok) {
     // Many dashboard calls are best-effort (polling). Return the parsed body instead
     // of throwing to avoid noisy stack traces during backend warmup/outages.
@@ -468,7 +473,9 @@ export const apiClient = {
   /** Run multi-agent pipeline and return unified insights */
   async getQuantCatalog(): Promise<QuantCatalog | null> {
     try {
-      return await djangoJson<QuantCatalog>('/api/quant/catalog/');
+      const data = await djangoJson<QuantCatalog>('/api/quant/catalog/');
+      if (!Array.isArray(data?.indicators)) return null;
+      return data;
     } catch (error) {
       console.error('Error fetching quant catalog:', error);
       return null;
