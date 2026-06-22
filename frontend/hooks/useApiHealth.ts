@@ -10,7 +10,8 @@ export function useApiHealth() {
     queryFn: () => apiClient.checkHealth(),
     refetchInterval: 30000,
     staleTime: 10000,
-    retry: 1,
+    retry: 6,
+    retryDelay: (attempt) => Math.min(30000, 5000 * (attempt + 1)),
   });
 
   return {

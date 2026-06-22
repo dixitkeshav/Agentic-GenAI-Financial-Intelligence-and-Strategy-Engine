@@ -109,19 +109,19 @@ export function useAgentInsights(ticker?: string, options?: AgentInsightsOptions
   const setInsights = useAgentStore((state) => state.setInsights);
 
   const { data: result, isLoading, isError, error, isFetching } = useQuery({
-    queryKey: ['agent-insights', ticker, options?.selectedIndicators?.join(','), options?.selectedPatterns?.join(',')],
+    queryKey: ['agent-insights', ticker ?? 'market', options?.selectedIndicators?.join(','), options?.selectedPatterns?.join(',')],
     queryFn: () =>
       apiClient.getAgentInsights(ticker, {
         selectedIndicators: options?.selectedIndicators,
         selectedPatterns: options?.selectedPatterns,
       }),
-    enabled: Boolean(ticker),
     refetchInterval: 300000,
     staleTime: 120000,
+    retry: 4,
+    retryDelay: (attempt) => Math.min(45000, 8000 * (attempt + 1)),
   });
 
   useEffect(() => {
-    if (!ticker) return;
     if (isLoading && !result) return;
     if (!result) {
       if (isError) {
@@ -153,7 +153,7 @@ export function useAgentInsights(ticker?: string, options?: AgentInsightsOptions
       return;
     }
     setInsights(mapAgentsResultToInsights(result));
-  }, [result, isLoading, isError, setInsights, ticker]);
+  }, [result, isLoading, isError, setInsights]);
 
   return { isLoading: isLoading || isFetching, result, isError, error };
 }

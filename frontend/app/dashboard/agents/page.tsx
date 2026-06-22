@@ -11,7 +11,7 @@ const DEFAULT_INDICATORS = ['rsi', 'mfi', 'macd_hist', 'sma_20', 'sma_50', 'retu
 
 export default function AgentsPage() {
   const [ticker, setTicker] = useState('RELIANCE');
-  const [activeTicker, setActiveTicker] = useState<string | undefined>(undefined);
+  const [activeTicker, setActiveTicker] = useState<string>('RELIANCE');
   const [catalog, setCatalog] = useState<QuantCatalog | null>(null);
   const [selectedIndicators, setSelectedIndicators] = useState<string[]>(DEFAULT_INDICATORS);
   const insights = useAgentStore((s) => s.insights);
@@ -56,7 +56,7 @@ export default function AgentsPage() {
             <button
               type="button"
               className="btn-pri"
-              onClick={() => setActiveTicker(ticker.trim() || undefined)}
+              onClick={() => setActiveTicker(ticker.trim() || 'RELIANCE')}
               disabled={isLoading}
             >
               {isLoading ? 'Running…' : '▶ Run Pipeline'}

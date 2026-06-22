@@ -389,7 +389,7 @@ export const apiClient = {
   /** Ping Django via proxy (live-ticker is lightweight). */
   async checkHealth(): Promise<{ ok: boolean; message?: string }> {
     try {
-      const response = await djangoFetch('/api/live-ticker/');
+      const response = await djangoFetch('/api/health/');
       if (response.ok) return { ok: true };
       const data = await response.json().catch(() => ({}));
       return {
@@ -495,11 +495,16 @@ export const apiClient = {
       if (ticker) body.ticker = ticker;
       if (options?.selectedIndicators?.length) body.selected_indicators = options.selectedIndicators;
       if (options?.selectedPatterns?.length) body.selected_patterns = options.selectedPatterns;
-      return await djangoJson<AgentsRunResult>('/api/agents/run/', {
+      const data = await djangoJson<AgentsRunResult>('/api/agents/run/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
+      if (data?.error) return data;
+      if (!data?.pipeline?.length && !data?.news_scout && !data?.decision) {
+        return { error: 'Empty response from agent API — backend may still be waking up.' } as AgentsRunResult;
+      }
+      return data;
     } catch (error) {
       console.error('Error fetching agent insights:', error);
       return null;

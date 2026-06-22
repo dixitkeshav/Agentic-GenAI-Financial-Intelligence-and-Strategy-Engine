@@ -8,7 +8,7 @@ export function ApiConnectionBanner() {
   if (isLoading) {
     return (
       <div style={{ margin: '0 0 14px', padding: 12, borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg-inset)', fontSize: 13, color: 'var(--text-3)' }}>
-        Connecting to Django API at {backendUrl}…
+        Waking up Django API at {backendUrl}… Render free tier can take up to 90s on first load.
       </div>
     );
   }

@@ -11,7 +11,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     () =>
       new QueryClient({
         defaultOptions: {
-          queries: { refetchOnWindowFocus: false, retry: 1 },
+          queries: {
+            refetchOnWindowFocus: false,
+            retry: 3,
+            retryDelay: (attempt) => Math.min(30000, 4000 * (attempt + 1)),
+          },
         },
       })
   );
