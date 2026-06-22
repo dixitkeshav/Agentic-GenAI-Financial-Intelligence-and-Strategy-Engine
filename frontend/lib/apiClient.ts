@@ -11,12 +11,28 @@ export class ApiError extends Error {
   }
 }
 
+const RENDER_WAKE_STATUSES = new Set([502, 503, 504]);
+
 async function djangoFetch(path: string, init?: RequestInit): Promise<Response> {
-  const response = await fetch(djangoApiUrl(path), {
-    ...init,
-    cache: 'no-store',
-  });
-  return response;
+  const url = djangoApiUrl(path);
+  let lastResponse: Response | undefined;
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const response = await fetch(url, {
+      ...init,
+      cache: 'no-store',
+    });
+    lastResponse = response;
+
+    if (!RENDER_WAKE_STATUSES.has(response.status)) {
+      return response;
+    }
+
+    // Render free tier: hibernate-wake-error (503) — retry with backoff.
+    await new Promise((resolve) => setTimeout(resolve, 4000 + attempt * 6000));
+  }
+
+  return lastResponse!;
 }
 
 async function djangoJson<T>(path: string, init?: RequestInit): Promise<T> {

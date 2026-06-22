@@ -3,8 +3,8 @@
 import { useEffect } from 'react';
 import { djangoApiUrl } from '@/lib/apiBase';
 
-const WARMUP_ATTEMPTS = 8;
-const WARMUP_DELAY_MS = 6000;
+const WARMUP_ATTEMPTS = 12;
+const WARMUP_DELAY_MS = 5000;
 
 /** Pings Django /api/health/ so Render free tier wakes before heavy dashboard calls. */
 export function useBackendWarmup() {

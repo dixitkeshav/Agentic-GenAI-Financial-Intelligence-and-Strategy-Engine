@@ -4,7 +4,10 @@ import { NextRequest, NextResponse } from 'next/server';
 export const maxDuration = 60;
 
 const DJANGO_ORIGIN =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') || 'http://127.0.0.1:8000';
+  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ||
+  (process.env.NODE_ENV === 'production'
+    ? 'https://fintelli-ai.onrender.com'
+    : 'http://127.0.0.1:8000');
 
 const HOP_BY_HOP = new Set([
   'connection',

@@ -1,8 +1,9 @@
 function resolveWsBaseUrl(): string {
+  const productionFallback = 'https://fintelli-ai.onrender.com';
   const raw =
     process.env.NEXT_PUBLIC_WS_URL?.replace(/\/$/, '') ||
     process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ||
-    'http://127.0.0.1:8000';
+    (process.env.NODE_ENV === 'production' ? productionFallback : 'http://127.0.0.1:8000');
   if (raw.startsWith('ws://') || raw.startsWith('wss://')) return raw;
   return raw.replace(/^http/, 'ws');
 }
