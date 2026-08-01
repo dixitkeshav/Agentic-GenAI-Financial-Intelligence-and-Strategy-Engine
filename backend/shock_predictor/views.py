@@ -1,15 +1,29 @@
 from django.core.paginator import Paginator
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+import logging
 
 from shock_predictor.models import ShockEvent, ShockAlert, ShockPrecursorPattern
-from shock_predictor.scoring import get_current_score
+from shock_predictor.scoring import get_current_score, compute_live_shock_score
 from shock_predictor.symbols import get_universe
+
+logger = logging.getLogger(__name__)
 
 
 @api_view(['GET'])
 def current_score(request):
-    return Response(get_current_score())
+    refresh = request.query_params.get('refresh', '').lower() in ('1', 'true', 'yes')
+    cached = get_current_score()
+    has_cache = bool(cached.get('timestamp'))
+    if refresh or not has_cache:
+        try:
+            return Response(compute_live_shock_score())
+        except Exception as e:
+            logger.exception("compute_live_shock_score: %s", e)
+            if has_cache:
+                return Response(cached)
+            return Response({**cached, 'error': str(e)})
+    return Response(cached)
 
 
 @api_view(['GET'])

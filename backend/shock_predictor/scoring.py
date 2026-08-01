@@ -4,6 +4,7 @@ from datetime import datetime
 from django.core.cache import cache
 
 from shock_predictor.nlp import get_finbert_sentiment, classify_cause_type, CAUSE_KEYWORDS
+from shock_predictor.news_fetcher import poll_all_feeds
 
 REDIS_SCORE_KEY = "shock:score:latest"
 SCORE_THRESHOLD = 70
@@ -99,3 +100,70 @@ def get_current_score() -> dict:
         'hedge': '',
         'timestamp': '',
     }
+
+
+def compute_live_shock_score(*, persist: bool = True) -> dict:
+    """
+    Score latest headlines without Celery/Redis workers (Render free tier).
+    Polls RSS feeds and falls back to NewsAPI market headlines.
+    """
+    articles = poll_all_feeds()
+
+    if len(articles) < 5:
+        try:
+            from fetch_news import newsapi_client as na
+
+            if na.is_configured():
+                for item in na.fetch_market_news(limit=15):
+                    title = item.get('title', '') or ''
+                    summary = item.get('summary', '') or ''
+                    articles.append(
+                        {
+                            'uid': title[:80],
+                            'source': item.get('source', 'NewsAPI'),
+                            'title': title,
+                            'summary': summary,
+                            'full_text': f'{title}. {summary}',
+                            'weight': 0.75,
+                        }
+                    )
+        except Exception:
+            pass
+
+    if len(articles) < 3:
+        try:
+            from fetch_news.news_aggregator import fetch_merged_news
+
+            merged = fetch_merged_news(None, limit=20, run_finbert=False, include_market=True)
+            for item in merged.get('articles', []):
+                title = item.get('title', '') or ''
+                summary = item.get('summary', '') or ''
+                articles.append(
+                    {
+                        'uid': title[:80],
+                        'source': item.get('source', 'merged'),
+                        'title': title,
+                        'summary': summary,
+                        'full_text': f'{title}. {summary}',
+                        'weight': 0.7,
+                    }
+                )
+        except Exception:
+            pass
+
+    if not articles:
+        return get_current_score()
+
+    scored = [compute_article_score(a) for a in articles]
+    top = max(scored, key=lambda x: x['shock_score'])
+    payload = {
+        'score': top['shock_score'],
+        'cause': top.get('cause_type', 'unknown'),
+        'headline': top.get('title', ''),
+        'source': top.get('source', ''),
+        'hedge': top.get('suggested_hedge', ''),
+        'timestamp': datetime.now().isoformat(),
+    }
+    if persist:
+        cache.set(REDIS_SCORE_KEY, json.dumps(payload), timeout=300)
+    return payload

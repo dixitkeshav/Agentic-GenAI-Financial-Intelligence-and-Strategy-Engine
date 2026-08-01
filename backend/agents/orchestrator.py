@@ -147,6 +147,29 @@ class AgentOrchestrator:
         record("bear_research", "Bear Research", "completed", bear_out.get("summary", ""), (time.perf_counter() - t0) * 1000)
         ctx["agent_outputs"]["BearResearcher"] = bear_out
 
+        shock_out: dict[str, Any] = {}
+        if self.shock and build_shock_context_from_pipeline:
+            t0 = time.perf_counter()
+            try:
+                shock_ctx = {**ctx, **build_shock_context_from_pipeline(ctx)}
+                shock_out = self.shock.run(shock_ctx)
+                record(
+                    "shock",
+                    "Shock Predictor",
+                    "completed",
+                    shock_out.get("summary", ""),
+                    (time.perf_counter() - t0) * 1000,
+                )
+            except Exception as exc:
+                logger.warning("Shock agent failed: %s", exc)
+                shock_out = {
+                    "summary": f"Shock predictor unavailable: {exc}",
+                    "shock_probability": 0,
+                }
+                record("shock", "Shock Predictor", "error", shock_out["summary"], (time.perf_counter() - t0) * 1000)
+            ctx["agent_outputs"]["Shock"] = shock_out
+            ctx["shock_probability"] = shock_out.get("shock_probability", 0)
+
         t0 = time.perf_counter()
         committee_out = self.risk_committee.run(ctx)
         record(
@@ -168,21 +191,6 @@ class AgentOrchestrator:
             (time.perf_counter() - t0) * 1000,
         )
         ctx["agent_outputs"]["Debate"] = debate_out
-
-        shock_out = {}
-        if self.shock and build_shock_context_from_pipeline:
-            t0 = time.perf_counter()
-            shock_ctx = {**ctx, **build_shock_context_from_pipeline(ctx)}
-            shock_out = self.shock.run(shock_ctx)
-            record(
-                "shock",
-                "Shock Predictor",
-                "completed",
-                shock_out.get("summary", ""),
-                (time.perf_counter() - t0) * 1000,
-            )
-            ctx["agent_outputs"]["Shock"] = shock_out
-            ctx["shock_probability"] = shock_out.get("shock_probability", 0)
 
         t0 = time.perf_counter()
         decision_out = self.decision.run(ctx)

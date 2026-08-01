@@ -579,8 +579,9 @@ export const apiClient = {
     return await response.json();
   },
 
-  async getShockScore(): Promise<ShockScorePayload> {
-    return djangoJson<ShockScorePayload>('/api/shock/score/');
+  async getShockScore(refresh = true): Promise<ShockScorePayload> {
+    const path = refresh ? '/api/shock/score/?refresh=1' : '/api/shock/score/';
+    return djangoJson<ShockScorePayload>(path);
   },
 
   async getShockUniverse(group = 'all'): Promise<{

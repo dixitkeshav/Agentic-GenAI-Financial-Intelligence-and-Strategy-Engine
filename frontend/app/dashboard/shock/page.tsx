@@ -11,6 +11,8 @@ const THRESHOLD_OPTIONS = [10, 100, 200, 300, 500];
 export default function ShockPage() {
   const [score, setScore] = useState(0);
   const [liveCause, setLiveCause] = useState('none');
+  const [scoreHeadline, setScoreHeadline] = useState('');
+  const [loading, setLoading] = useState(true);
   const [alerts, setAlerts] = useState<ShockAlertItem[]>([]);
   const [history, setHistory] = useState<ShockHistoryRow[]>([]);
   const [connected, setConnected] = useState(false);
@@ -29,27 +31,33 @@ export default function ShockPage() {
   const ws = useRef<WebSocket | null>(null);
 
   const loadRest = useCallback(async () => {
-    const histOpts: { cause?: string; direction?: string; index?: string; threshold?: number } = {
-      threshold,
-    };
-    if (causeFilter !== 'all') histOpts.cause = causeFilter;
-    if (directionFilter !== 'all') histOpts.direction = directionFilter;
-    if (indexFilter !== 'all') histOpts.index = indexFilter;
+    setLoading(true);
+    try {
+      const histOpts: { cause?: string; direction?: string; index?: string; threshold?: number } = {
+        threshold,
+      };
+      if (causeFilter !== 'all') histOpts.cause = causeFilter;
+      if (directionFilter !== 'all') histOpts.direction = directionFilter;
+      if (indexFilter !== 'all') histOpts.index = indexFilter;
 
-    const [alertsRes, historyRes, scoreRes, scanRes, uniRes] = await Promise.all([
-      apiClient.getShockAlerts(),
-      apiClient.getShockHistory(1, histOpts),
-      apiClient.getShockScore(),
-      apiClient.getShockLiveScan(threshold, indexFilter === 'all' ? 'nifty' : indexFilter.toLowerCase()),
-      apiClient.getShockUniverse(universeGroup),
-    ]);
-    setAlerts(alertsRes);
-    setHistory(historyRes.results || []);
-    const s = scoreRes;
-    setScore(s.score ?? 0);
-    setLiveCause(s.cause ?? 'none');
-    setLiveScan(scanRes);
-    setUniverseCount(uniRes.count ?? 0);
+      const [alertsRes, historyRes, scoreRes, scanRes, uniRes] = await Promise.all([
+        apiClient.getShockAlerts(),
+        apiClient.getShockHistory(1, histOpts),
+        apiClient.getShockScore(true),
+        apiClient.getShockLiveScan(threshold, indexFilter === 'all' ? 'nifty' : indexFilter.toLowerCase()),
+        apiClient.getShockUniverse(universeGroup),
+      ]);
+      setAlerts(alertsRes);
+      setHistory(historyRes.results || []);
+      const s = scoreRes;
+      setScore(s.score ?? 0);
+      setLiveCause(s.cause ?? 'none');
+      setScoreHeadline(s.headline ?? '');
+      setLiveScan(scanRes);
+      setUniverseCount(uniRes.count ?? 0);
+    } finally {
+      setLoading(false);
+    }
   }, [causeFilter, directionFilter, indexFilter, threshold, universeGroup]);
 
   useEffect(() => {
@@ -182,6 +190,12 @@ export default function ShockPage() {
             <div className={`slevel ${riskClass}`}>⚠ {riskLabel}</div>
             <div style={{ fontSize: 11.5, color: 'var(--text-3)', textAlign: 'center', marginTop: 6 }}>
               Cause: <strong>{liveCause}</strong>
+              {scoreHeadline && (
+                <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)' }}>{scoreHeadline}</div>
+              )}
+              {loading && (
+                <div style={{ marginTop: 8, fontSize: 11 }}>Scoring live headlines…</div>
+              )}
             </div>
           </div>
         </div>

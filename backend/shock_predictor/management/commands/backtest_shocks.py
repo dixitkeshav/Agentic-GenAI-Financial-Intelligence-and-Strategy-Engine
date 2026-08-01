@@ -2,6 +2,7 @@ import datetime
 import re
 from collections import Counter
 
+import numpy as np
 import pandas as pd
 import yfinance as yf
 from django.core.management.base import BaseCommand
@@ -47,7 +48,7 @@ def _find_shock_days(
     df["NetMove"] = df["Close"] - df["Open"]
     df["AbsNet"] = df["NetMove"].abs()
     max_range_pct = 0.12
-    min_range = max(float(threshold_points), (df["Open"] * 0.015))
+    min_range = np.maximum(float(threshold_points), df["Open"] * 0.015)
     plausible = df["Range"] <= (df["Open"] * max_range_pct)
     # Sudden one-direction move: |close-open| >= threshold (not just intraday chop)
     move_ok = df["AbsNet"] >= min_range
