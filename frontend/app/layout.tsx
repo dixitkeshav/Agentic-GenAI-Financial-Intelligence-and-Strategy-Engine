@@ -5,8 +5,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { FintelliThemeProvider } from '@/lib/fintelli/theme';
 import { useState } from 'react';
+import { useBackendWarmup } from '@/hooks/useBackendWarmup';
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  useBackendWarmup();
   const [queryClient] = useState(
     () =>
       new QueryClient({

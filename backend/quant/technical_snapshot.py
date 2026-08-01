@@ -8,10 +8,13 @@ from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
+from django.core.cache import cache
 
 from quant.indicators import enrich_ohlc, rsi, mfi, macd_histogram, bollinger_pct_b, vwap_distance_pct
 
 logger = logging.getLogger(__name__)
+
+_OHLC_CACHE_TTL = 120  # seconds — smooths repeat dashboard loads without serving stale intraday data
 
 
 def _yf_symbol(symbol: str) -> str:
@@ -28,6 +31,11 @@ def _yf_symbol(symbol: str) -> str:
 
 
 def _fetch_ohlc(symbol: str, period: str = "1y") -> Optional[pd.DataFrame]:
+    cache_key = f"ohlc:{_yf_symbol(symbol)}:{period}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
         import yfinance as yf
 
@@ -45,7 +53,9 @@ def _fetch_ohlc(symbol: str, period: str = "1y") -> Optional[pd.DataFrame]:
         )
         if getattr(df.index, "tz", None) is not None:
             df.index = df.index.tz_localize(None)
-        return df.sort_index()
+        df = df.sort_index()
+        cache.set(cache_key, df, timeout=_OHLC_CACHE_TTL)
+        return df
     except Exception as exc:
         logger.warning("OHLC fetch failed %s: %s", symbol, exc)
         return None
