@@ -42,6 +42,8 @@ services:
         sync: false
       - key: ALPHA_VANTAGE_API_KEY
         sync: false
+      - key: INDIAN_API_KEY
+        sync: false
       - key: FEATURE_GENAI_INSIGHTS
         value: "true"
       - key: FEATURE_AGENTS
