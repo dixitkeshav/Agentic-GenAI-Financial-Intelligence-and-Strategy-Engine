@@ -10,7 +10,7 @@ export default function NewsPage() {
     <div>
       <div className="pg-head">
         <div className="pg-title">News Intelligence</div>
-        <div className="pg-sub">NewsAPI + Alpha Vantage feed · /api/fetch-news/</div>
+        <div className="pg-sub">Real-time market news with sentiment scoring</div>
       </div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
         <span className="badge badge-bl">{news.length} articles loaded</span>
