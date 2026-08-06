@@ -15,6 +15,7 @@ from .models import NewsArticle
 from .sentiment import analyze_financial_sentiment
 from . import finnhub_client as fh
 from . import newsapi_client as na
+from . import indianapi_client as ia
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
@@ -859,29 +860,40 @@ def market_history(request, symbol: str):
 
         t = yf.Ticker(symbol)
         hist = t.history(period=period)
-        if hist is None or hist.empty:
-            return Response({"error": "No data", "history": []})
-        history = []
-        for idx, row in hist.iterrows():
-            ms = int(pd.Timestamp(idx).timestamp() * 1000)
-            vol = row["Volume"] if "Volume" in row.index else 0
-            if pd.isna(vol):
-                vol = 0
-            else:
-                vol = int(vol)
-            history.append(
-                {
-                    "timestamp": ms,
-                    "open": round(float(row["Open"]), 2),
-                    "high": round(float(row["High"]), 2),
-                    "low": round(float(row["Low"]), 2),
-                    "close": round(float(row["Close"]), 2),
-                    "volume": vol,
-                }
-            )
-        return Response({"symbol": symbol, "history": history, "source": "yfinance"})
+        if hist is not None and not hist.empty:
+            history = []
+            for idx, row in hist.iterrows():
+                ms = int(pd.Timestamp(idx).timestamp() * 1000)
+                vol = row["Volume"] if "Volume" in row.index else 0
+                if pd.isna(vol):
+                    vol = 0
+                else:
+                    vol = int(vol)
+                history.append(
+                    {
+                        "timestamp": ms,
+                        "open": round(float(row["Open"]), 2),
+                        "high": round(float(row["High"]), 2),
+                        "low": round(float(row["Low"]), 2),
+                        "close": round(float(row["Close"]), 2),
+                        "volume": vol,
+                    }
+                )
+            return Response({"symbol": symbol, "history": history, "source": "yfinance"})
+        if ia.is_configured():
+            rows, err = ia.historical_data(symbol, period)
+            if not err and rows:
+                return Response({"symbol": symbol, "history": rows, "source": "indianapi"})
+        return Response({"error": "No data", "history": []})
     except Exception as e:
         logger.warning("market_history: %s", e)
+        if ia.is_configured():
+            try:
+                rows, err = ia.historical_data(symbol, period)
+                if not err and rows:
+                    return Response({"symbol": symbol, "history": rows, "source": "indianapi"})
+            except Exception as e2:
+                logger.warning("market_history indianapi fallback: %s", e2)
         return Response({"error": str(e), "history": []})
 
 
@@ -948,6 +960,10 @@ def live_ticker(request):
                     }
             if row is None:
                 row = _yf_row(s)
+            if row is None and ia.is_configured():
+                q = ia.quote(s)
+                if q is not None and q.get("c") is not None:
+                    row = {"symbol": s, "name": s, "price": _r2(q["c"]), "change_pct": _r2(q.get("dp") or 0)}
             if row:
                 out.append(row)
         src = "finnhub" if fh.is_configured() else "yfinance"
