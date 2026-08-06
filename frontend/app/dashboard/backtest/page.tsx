@@ -172,7 +172,7 @@ export default function BacktestPage() {
       <div className="pg-head">
         <div className="pg-title">Backtesting</div>
         <div className="pg-sub">
-          Custom rules + Groq fix · News-day trade log · yfinance options proxy
+          Custom rule-based strategy backtesting
           {catalogMeta ? ` · ${catalogMeta.indicators} indicators · ${catalogMeta.patterns} candle patterns` : ''}
         </div>
       </div>
@@ -201,7 +201,7 @@ export default function BacktestPage() {
                   {optionsMeta.available
                     ? optionsMeta.proxy
                       ? `Proxy mode (underlying OHLC)`
-                      : `${optionsMeta.source ?? 'yfinance'} chain (${optionsMeta.chain_rows ?? optionsMeta.expiries_count ?? 0} strikes)`
+                      : `Live chain (${optionsMeta.chain_rows ?? optionsMeta.expiries_count ?? 0} strikes)`
                     : 'Unavailable'}
                 </span>
                 {optionsMeta.source && !optionsMeta.proxy && (
@@ -316,7 +316,7 @@ export default function BacktestPage() {
                 onClick={fixWithAi}
                 disabled={compiling || !strategyPrompt.trim()}
               >
-                {compiling ? 'Fixing…' : '✨ Fix with AI (Groq)'}
+                {compiling ? 'Fixing…' : '✨ Fix with AI'}
               </button>
             </div>
             <textarea
