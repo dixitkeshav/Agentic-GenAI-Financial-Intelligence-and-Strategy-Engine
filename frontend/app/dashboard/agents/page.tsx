@@ -35,7 +35,7 @@ export default function AgentsPage() {
       <div className="pg-head">
         <div className="pg-title">Agent Insights</div>
         <div className="pg-sub">
-          Merged NewsAPI + Yahoo · FinBERT · extended technicals · /api/agents/run/
+          Multi-agent research pipeline with sentiment and technical analysis
         </div>
       </div>
 
@@ -64,14 +64,9 @@ export default function AgentsPage() {
           </div>
           {sourceLabel && (
             <p className="pg-sub" style={{ marginTop: 10 }}>
-              News: <strong>{sourceLabel}</strong>
+              News coverage: <strong>{sourceLabel}</strong>
               {sourceCounts && (
-                <>
-                  {' '}
-                  · NewsAPI {sourceCounts.newsapi ?? 0} · Yahoo {sourceCounts.yfinance ?? 0}
-                  {(sourceCounts.finnhub ?? 0) > 0 && <> · Finnhub {sourceCounts.finnhub}</>}
-                  {(sourceCounts.alpha_vantage ?? 0) > 0 && <> · Alpha {sourceCounts.alpha_vantage}</>}
-                </>
+                <> · {Object.values(sourceCounts).reduce((a, b) => a + (b ?? 0), 0)} articles analyzed</>
               )}
             </p>
           )}
