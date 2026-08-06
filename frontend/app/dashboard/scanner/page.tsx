@@ -31,7 +31,7 @@ export default function ScannerPage() {
     <div>
       <div className="pg-head">
         <div className="pg-title">Screener</div>
-        <div className="pg-sub">Sentiment + momentum (NewsAPI / Finnhub + yfinance) · /api/scanner/</div>
+        <div className="pg-sub">Sentiment and momentum screening across the market</div>
       </div>
 
       <div className="card mb14">
