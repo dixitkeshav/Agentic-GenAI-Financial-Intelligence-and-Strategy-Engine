@@ -61,12 +61,12 @@ export default function DashboardPage() {
     <div>
       <div className="pg-head">
         <div className="pg-title">Financial Intelligence Dashboard</div>
-        <div className="pg-sub">AI-powered insights · Live data from Django API</div>
+        <div className="pg-sub">AI-powered insights, live from the market</div>
       </div>
 
       <div className="briefing">
         <div className="brief-badge">
-          <div className="ldot" /> AI Briefing · Live pipeline
+          <div className="ldot" /> AI Briefing
         </div>
         <div className="brief-title">
           {agentsResult?.decision?.recommendation ||
