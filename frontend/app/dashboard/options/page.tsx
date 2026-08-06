@@ -53,7 +53,7 @@ export default function OptionsPage() {
     <div>
       <div className="pg-head">
         <div className="pg-title">Options Chain</div>
-        <div className="pg-sub">yfinance + Finnhub chain · /api/options-chain/</div>
+        <div className="pg-sub">Live options chain with strike-level pricing</div>
       </div>
 
       <div className="card mb14">
@@ -136,7 +136,7 @@ export default function OptionsPage() {
               ) : (
                 <tr>
                   <td colSpan={9} style={{ color: 'var(--text-3)' }}>
-                    No chain rows. US: AAPL, SPY, NVDA. India: RELIANCE.NS (yfinance proxy).
+                    No chain rows. Try US: AAPL, SPY, NVDA. India: RELIANCE.NS.
                   </td>
                 </tr>
               )}
