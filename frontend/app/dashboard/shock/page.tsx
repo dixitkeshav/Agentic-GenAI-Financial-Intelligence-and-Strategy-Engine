@@ -91,7 +91,7 @@ export default function ShockPage() {
       <div className="pg-head">
         <div className="pg-title">Shock Predictor</div>
         <div className="pg-sub">
-          Directional index moves · historic news causes · universe {universeCount} symbols ({universeGroup})
+          Real-time shock risk across {universeCount} symbols ({universeGroup})
         </div>
       </div>
 
