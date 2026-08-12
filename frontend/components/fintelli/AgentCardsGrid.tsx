@@ -12,10 +12,55 @@ const ICONS: Record<string, string> = {
   Decision: '🎯',
 };
 
-export function AgentCardsGrid({ insights }: { insights: AgentInsight[] }) {
+/** Skeleton card shown while the pipeline is running */
+function AgentSkeleton({ index }: { index: number }) {
+  return (
+    <div
+      className="card"
+      style={{ animationDelay: `${index * 80}ms`, animation: 'step-fadein .35s ease both' }}
+    >
+      <div className="ch">
+        <div className="skel" style={{ width: 120, height: 16 }} />
+        <div className="skel" style={{ width: 52, height: 18, borderRadius: 20 }} />
+      </div>
+      <div className="cb">
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+          <div className="skel" style={{ width: 70, height: 11 }} />
+          <div className="skel" style={{ width: 28, height: 11 }} />
+        </div>
+        <div className="skel" style={{ height: 4, marginBottom: 14, borderRadius: 2 }} />
+        <div className="skel" style={{ height: 11, marginBottom: 6 }} />
+        <div className="skel" style={{ height: 11, marginBottom: 6, width: '85%' }} />
+        <div className="skel" style={{ height: 11, width: '60%' }} />
+      </div>
+    </div>
+  );
+}
+
+const SKELETON_COUNT = 6;
+
+export function AgentCardsGrid({
+  insights,
+  isLoading,
+}: {
+  insights: AgentInsight[];
+  isLoading?: boolean;
+}) {
+  // Show skeletons when actively loading and no insights yet
+  if (isLoading && !insights.length) {
+    return (
+      <div className="g3">
+        {Array.from({ length: SKELETON_COUNT }).map((_, i) => (
+          <AgentSkeleton key={i} index={i} />
+        ))}
+      </div>
+    );
+  }
+
   if (!insights.length) {
     return <p style={{ fontSize: 13, color: 'var(--text-3)' }}>Run the agent pipeline to see results.</p>;
   }
+
   return (
     <div className="g3">
       {insights.map((a) => {
