@@ -442,9 +442,11 @@ def agents_run(request):
                     "title": i.get("title", ""),
                     "summary": i.get("summary", ""),
                     "sentiment": (i.get("sentiment") or "neutral").lower(),
+                    "sentiment_score": i.get("sentiment_score"),
                     "source": i.get("source", ""),
                     "provider": i.get("provider", ""),
                     "url": i.get("url", "#"),
+                    "time_published": i.get("time_published", ""),
                 }
                 for i in merged.get("articles", [])
             ]
@@ -460,6 +462,11 @@ def agents_run(request):
                         "title": i.get("title", ""),
                         "summary": i.get("summary", ""),
                         "sentiment": (i.get("sentiment") or "neutral").lower(),
+                        "sentiment_score": i.get("sentiment_score"),
+                        "source": i.get("source", ""),
+                        "provider": i.get("provider", ""),
+                        "url": i.get("url", "#"),
+                        "time_published": i.get("time_published", ""),
                     }
                     for i in merged["articles"]
                 ]
@@ -548,8 +555,8 @@ def agents_run(request):
             n = sum(1 for a in articles if (a.get("sentiment") or "").lower() == "negative")
             if p > n and p > len(articles) - p - n: agg = "positive"
             elif n > p: agg = "negative"
-        from agents.orchestrator import AgentOrchestrator
-        orch = AgentOrchestrator()
+        from agents.orchestrator import get_orchestrator
+        orch = get_orchestrator()
         result = orch.run(
             articles,
             ticker=ticker,
