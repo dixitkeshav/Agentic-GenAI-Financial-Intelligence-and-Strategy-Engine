@@ -365,17 +365,24 @@ canvas.mc{width:100%!important;height:100%!important;border-radius:0;border:none
 .wl-c{font-size:10.5px;font-weight:600;font-family:'JetBrains Mono'}
 
 /* Pipeline */
-.pipe-step{display:flex;align-items:center;gap:11px;padding:11px 15px;border-bottom:1px solid var(--border);transition:background .15s}
+.pipe-step{display:flex;align-items:center;gap:11px;padding:11px 15px;border-bottom:1px solid var(--border);transition:background .15s;animation:step-fadein .35s ease both}
 .pipe-step:last-child{border-bottom:none}
 .pipe-step:hover{background:var(--bg-hover)}
-.ps-ind{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;font-weight:700}
+@keyframes step-fadein{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:none}}
+.ps-ind{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;font-weight:700;transition:background .2s,color .2s}
 .ps-done{background:var(--green-soft);color:var(--green);border:1.5px solid rgba(4,120,87,.3)}
-.ps-run{background:var(--accent-soft);color:var(--accent);border:1.5px solid var(--accent-mid);animation:pulse-ring 1.6s ease infinite}
-@keyframes pulse-ring{0%,100%{box-shadow:0 0 0 0 var(--accent-glow)}50%{box-shadow:0 0 0 4px var(--accent-soft)}}
+.ps-run{background:var(--accent-soft);color:var(--accent);border:1.5px solid var(--accent-mid);animation:pulse-ring 1.4s ease infinite}
+.ps-spin{animation:ps-rotate 1.2s linear infinite}
+@keyframes ps-rotate{to{transform:rotate(360deg)}}
+@keyframes pulse-ring{0%,100%{box-shadow:0 0 0 0 var(--accent-glow)}50%{box-shadow:0 0 0 5px var(--accent-soft)}}
 .ps-pend{background:var(--bg-inset);color:var(--text-4);border:1.5px solid var(--border)}
+.ps-err{background:rgba(239,68,68,.12);color:var(--red);border:1.5px solid rgba(239,68,68,.3)}
 .ps-nm{font-size:12.5px;font-weight:500;color:var(--text-1)}
 .ps-st{font-size:10.5px;color:var(--text-3);margin-top:1px}
 .ps-t{font-size:10px;color:var(--text-4);font-family:'JetBrains Mono';margin-left:auto;flex-shrink:0}
+/* Agent card skeleton */
+.skel{border-radius:6px;background:linear-gradient(90deg,var(--bg-inset) 25%,var(--bg-hover) 50%,var(--bg-inset) 75%);background-size:200% 100%;animation:shimmer 1.4s infinite}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
 
 /* Holdings */
 .hold-row{display:flex;align-items:center;gap:9px;padding:9px 15px;border-bottom:1px solid var(--border)}
