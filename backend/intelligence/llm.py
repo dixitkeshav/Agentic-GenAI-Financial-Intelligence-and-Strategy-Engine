@@ -48,6 +48,7 @@ def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 500) -> Op
             ],
             max_tokens=max_tokens,
             temperature=0.3,
+            timeout=15,  # 15s hard cap — fall back to rule-based if LLM is slow
         )
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:
