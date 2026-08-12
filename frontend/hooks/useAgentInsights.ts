@@ -116,9 +116,9 @@ export function useAgentInsights(ticker?: string, options?: AgentInsightsOptions
         selectedPatterns: options?.selectedPatterns,
       }),
     refetchInterval: 300000,
-    staleTime: 120000,
-    retry: 4,
-    retryDelay: (attempt) => Math.min(45000, 8000 * (attempt + 1)),
+    staleTime: 30000,       // 30s — results feel fresh; re-running a new ticker refetches
+    retry: 2,               // 2 retries max; backend is fast once warm
+    retryDelay: (attempt) => Math.min(10000, 2000 * (attempt + 1)),
   });
 
   useEffect(() => {
