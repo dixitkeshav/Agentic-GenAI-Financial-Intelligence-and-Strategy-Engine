@@ -79,6 +79,10 @@ class AgentOrchestrator:
     ) -> dict[str, Any]:
         """
         Execute pipeline: News Scout -> Macro -> Technical -> Market Reaction -> Risk -> Decision.
+        Stage 1 (scout/macro/technical) runs in parallel.
+        Stage 2 (market_reaction/risk) runs in parallel after Stage 1.
+        Stage 3 (bull/bear/shock/risk_committee) runs ALL in parallel after Stage 2.
+        Stage 4 (debate -> decision) runs sequentially after Stage 3.
         """
         pipeline: list[dict[str, Any]] = []
         meta = news_meta or {}
@@ -116,8 +120,8 @@ class AgentOrchestrator:
             out = agent.run(run_ctx)
             return out, (time.perf_counter() - t0) * 1000
 
-        # Stage 1: independent of each other — only need articles/ticker.
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        # ── Stage 1: all three are independent — run in parallel with 5 workers ──
+        with ThreadPoolExecutor(max_workers=5) as pool:
             f_scout = pool.submit(_timed, self.news_scout, ctx)
             f_macro = pool.submit(_timed, self.macro, ctx)
             f_technical = pool.submit(_timed, self.technical, ctx)
@@ -137,7 +141,7 @@ class AgentOrchestrator:
         ctx["agent_outputs"]["Technical"] = technical_out
         ctx["technical_signal"] = technical_out.get("signal", "neutral")
 
-        # Stage 2: depends only on stage 1 outputs, independent of each other.
+        # ── Stage 2: depends on Stage 1 — run in parallel ──
         with ThreadPoolExecutor(max_workers=2) as pool:
             f_reaction = pool.submit(_timed, self.market_reaction, ctx)
             f_risk = pool.submit(_timed, self.risk, ctx)
@@ -150,7 +154,7 @@ class AgentOrchestrator:
         record("risk", "Risk", "completed", risk_out.get("summary", ""), risk_ms)
         ctx["agent_outputs"]["Risk"] = risk_out
 
-        # Stage 3: bull/bear/shock only need stage 1+2 outputs, independent of each other.
+        # ── Stage 3: bull / bear / shock / risk_committee — all independent, run in parallel ──
         def _run_shock() -> tuple[dict[str, Any], float]:
             t0 = time.perf_counter()
             try:
@@ -165,13 +169,17 @@ class AgentOrchestrator:
                 )
 
         run_shock = bool(self.shock and build_shock_context_from_pipeline)
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        # risk_committee only needs stage-2 Risk flags; shock_probability defaults to 0
+        # if shock hasn't run yet — acceptable trade-off for parallelism.
+        with ThreadPoolExecutor(max_workers=4) as pool:
             f_bull = pool.submit(_timed, self.bull, ctx)
             f_bear = pool.submit(_timed, self.bear, ctx)
             f_shock = pool.submit(_run_shock) if run_shock else None
+            f_committee = pool.submit(_timed, self.risk_committee, ctx)
             bull_out, bull_ms = f_bull.result()
             bear_out, bear_ms = f_bear.result()
             shock_out, shock_ms = f_shock.result() if f_shock else ({}, 0.0)
+            committee_out, committee_ms = f_committee.result()
 
         record("bull_research", "Bull Research", "completed", bull_out.get("summary", ""), bull_ms)
         ctx["agent_outputs"]["BullResearcher"] = bull_out
@@ -191,17 +199,16 @@ class AgentOrchestrator:
             ctx["agent_outputs"]["Shock"] = shock_out
             ctx["shock_probability"] = shock_out.get("shock_probability", 0)
 
-        t0 = time.perf_counter()
-        committee_out = self.risk_committee.run(ctx)
         record(
             "risk_committee",
             "Risk Committee",
             "completed",
             committee_out.get("summary", ""),
-            (time.perf_counter() - t0) * 1000,
+            committee_ms,
         )
         ctx["agent_outputs"]["RiskCommittee"] = committee_out
 
+        # ── Stage 4: debate → decision (sequential, each depends on the previous) ──
         t0 = time.perf_counter()
         debate_out = self.debate.run(ctx)
         record(
@@ -233,9 +240,38 @@ class AgentOrchestrator:
             "recommendation": decision_out.get("recommendation", ""),
             "pipeline": pipeline,
             "article_count": len(articles),
+            "articles": [
+                {
+                    "title": a.get("title", ""),
+                    "summary": a.get("summary", ""),
+                    "sentiment": a.get("sentiment", "neutral"),
+                    "sentiment_score": a.get("sentiment_score"),
+                    "source": a.get("source", ""),
+                    "provider": a.get("provider", ""),
+                    "url": a.get("url", "#"),
+                    "time_published": a.get("time_published", ""),
+                }
+                for a in articles[:40]
+            ],
             "news_source": meta.get("source"),
             "news_sources": meta.get("sources"),
             "ticker": ticker or None,
             "selected_indicators": selected_indicators or [],
             "selected_patterns": selected_patterns or [],
         }
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton — agents are heavy objects; create them once per
+# worker process instead of on every HTTP request.
+# ---------------------------------------------------------------------------
+_SINGLETON: AgentOrchestrator | None = None
+
+
+def get_orchestrator() -> AgentOrchestrator:
+    """Return (or lazily create) the process-wide orchestrator singleton."""
+    global _SINGLETON
+    if _SINGLETON is None:
+        _SINGLETON = AgentOrchestrator()
+        logger.info("AgentOrchestrator singleton created.")
+    return _SINGLETON
