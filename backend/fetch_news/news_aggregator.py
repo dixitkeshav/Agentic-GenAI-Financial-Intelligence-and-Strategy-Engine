@@ -67,24 +67,45 @@ def _fetch_yfinance_news(symbol: str, limit: int = 15) -> list[dict[str, Any]]:
         for row in raw[:limit]:
             if not isinstance(row, dict):
                 continue
-            title = row.get("title") or ""
+
+            # ── New yfinance format: {'id': ..., 'content': {'title': ..., ...}} ──
+            content = row.get("content")
+            if isinstance(content, dict):
+                title = content.get("title") or ""
+                summary = content.get("summary") or content.get("description") or title
+                pub = content.get("pubDate") or content.get("displayTime") or ""
+                url = ""
+                canonical = content.get("canonicalUrl")
+                if isinstance(canonical, dict):
+                    url = canonical.get("url") or ""
+                provider_info = content.get("provider")
+                source = "Yahoo Finance"
+                if isinstance(provider_info, dict):
+                    source = provider_info.get("displayName") or "Yahoo Finance"
+                time_published = pub[:19] + "Z" if pub else ""
+            else:
+                # ── Legacy flat format ──
+                title = row.get("title") or ""
+                summary = row.get("summary") or title
+                url = row.get("link") or row.get("url") or "#"
+                source = row.get("publisher") or "Yahoo Finance"
+                pub = row.get("providerPublishTime")
+                time_published = ""
+                if pub:
+                    try:
+                        from datetime import datetime
+                        time_published = datetime.utcfromtimestamp(int(pub)).isoformat() + "Z"
+                    except Exception:
+                        pass
+
             if not title:
                 continue
-            pub = row.get("providerPublishTime")
-            time_published = ""
-            if pub:
-                try:
-                    from datetime import datetime
-
-                    time_published = datetime.utcfromtimestamp(int(pub)).isoformat() + "Z"
-                except Exception:
-                    pass
             out.append(
                 {
                     "title": title,
-                    "summary": row.get("summary") or title,
-                    "url": row.get("link") or row.get("url") or "#",
-                    "source": (row.get("publisher") or "Yahoo Finance"),
+                    "summary": summary,
+                    "url": url or "#",
+                    "source": source,
                     "time_published": time_published,
                     "provider": "yfinance",
                 }
@@ -93,6 +114,7 @@ def _fetch_yfinance_news(symbol: str, limit: int = 15) -> list[dict[str, Any]]:
     except Exception as exc:
         logger.debug("yfinance news for %s: %s", yf_sym, exc)
         return []
+
 
 
 def _fetch_finnhub_news(symbol: str, limit: int = 15) -> list[dict[str, Any]]:
