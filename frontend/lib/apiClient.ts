@@ -135,6 +135,17 @@ export interface QuantCatalog {
   strategy_count?: number;
 }
 
+export interface ArticleItem {
+  title: string;
+  summary?: string;
+  sentiment?: string;
+  sentiment_score?: number | null;
+  source?: string;
+  provider?: string;
+  url?: string;
+  time_published?: string;
+}
+
 export interface AgentsRunResult {
   error?: string;
   news_scout: { summary?: string; spike_detected?: boolean; spike_direction?: string };
@@ -157,6 +168,7 @@ export interface AgentsRunResult {
   recommendation?: string;
   pipeline?: PipelineStep[];
   article_count?: number;
+  articles?: ArticleItem[];
   news_source?: string;
   news_sources?: Record<string, number>;
   ticker?: string | null;
